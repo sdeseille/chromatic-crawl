@@ -73,6 +73,41 @@ let current_level = 1;
 // ------------ functions toolbox ------------
 function dist(a,b){ let dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
+function createChrono() {
+  let startTime = 0;
+  let endTime = 0;
+  let running = false;
+
+  return {
+    start() {
+      startTime = performance.now();
+      running = true;
+    },
+    stop() {
+      if (running) {
+        endTime = performance.now();
+        running = false;
+      }
+    },
+    reset() {
+      startTime = 0;
+      endTime = 0;
+      running = false;
+    },
+    getElapsed() {
+      let now = running ? performance.now() : endTime;
+      return (now - startTime) / 1000; // secondes
+    }
+  };
+}
+
+let chrono = createChrono();
+
+function computeTimeBonus(seconds) {
+  let t = Math.min(seconds, 60); // borne max 60s
+  return Math.max(0, Math.round(1000 * (60 - t) / 60));
+}
+
 function is_last_level(level){ return level == number_of_levels;}
 
 onKey('r', function(e) {
@@ -254,6 +289,21 @@ function tileToXY(col, row, tileEngine) {
     y: row * th + th/2
   };
 }
+
+function initGame(reason,level) {
+  if (reason == 'restart'){
+    chrono.reset();
+    // -- reinit variable used for game score
+    player_score = 0;
+    player_name = '';
+    is_name_entered = false;
+  }
+  chrono.start();
+  game_level = level;
+}
+
+// Initialization of the game
+initGame('start',current_level);
 
 // --- Main Loop ---
 let scoreTable = [];
