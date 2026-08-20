@@ -278,3 +278,24 @@ let start_menu = Grid({
   children: [start, highscore]
 });
 track(start,highscore);
+
+// helper to convert col/row → centered pixel coordinates
+function tileToXY(col, row, tileEngine) {
+  let tw = tileEngine.tilewidth;
+  let th = tileEngine.tileheight;
+  return {
+    x: col * tw + tw/2,
+    y: row * th + th/2
+  };
+}
+
+// --- Main Loop ---
+let scoreTable = [];
+let loop = GameLoop({  // create the main game loop
+  update: function() { // update the game state
+  },
+  render: function() { // render the game state
+  }
+});
+
+loop.start();    // start the game
