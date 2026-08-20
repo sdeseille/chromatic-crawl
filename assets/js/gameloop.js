@@ -52,10 +52,6 @@ const { canvas } = init();
 initPointer();
 initKeys();
 
-
-
-
-
 // ------------ functions toolbox ------------
 function dist(a,b){ let dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
@@ -72,7 +68,7 @@ onKey('r', function(e) {
 
 function get_highscores() {
   // Retrieve scores from localStorage or return an empty array if not present
-  return JSON.parse(localStorage.getItem('blacky_returns_home_highscores')) || [];
+  return JSON.parse(localStorage.getItem('chromatic_crawl_highscores')) || [];
 }
 
 function save_highscore(new_score, player_name) {
@@ -87,7 +83,7 @@ function save_highscore(new_score, player_name) {
   highscores.splice(MAX_HIGH_SCORES);
 
   // Save back to localStorage
-  localStorage.setItem('blacky_returns_home_highscores', JSON.stringify(highscores));
+  localStorage.setItem('chromatic_crawl_highscores', JSON.stringify(highscores));
 }
 
 function generate_score_table(highscores) {
@@ -192,7 +188,7 @@ function new_banner(msg, colorname) {
   });
 }
 
-let game_title = new_banner('🎭 Blacky returns home 🎭', 'yellow');
+let game_title = new_banner('🌈 Chromatic Crawl 🦄', 'yellow');
 let highscores_title = new_banner('🏆 -= Highscore =- 🏆', 'gold');
 
 let game_over = Text({
@@ -293,6 +289,34 @@ function tileToXY(col, row, tileEngine) {
 let scoreTable = [];
 let loop = GameLoop({  // create the main game loop
   update: function() { // update the game state
+    let highscores = [];
+    switch (game_state) {
+      case 'menu':
+        break;
+      case 'play':
+        break;
+      case 'gameover':
+        game_over.update();
+        // Check if player made a high score
+        highscores = get_highscores();
+        break;
+      case 'gamewon':
+        game_won.update();
+        // Check if player made a high score
+        highscores = get_highscores();
+        if (player_score > highscores[- 1]?.score || highscores.length < MAX_HIGH_SCORES) {
+          // Player has a high score, ask for their name
+          let player_name = prompt('New High Score! Enter your nickname:');
+          console.log('player_name: ['+player_name+']');
+          let trimmed_player_name = player_name.substring(0, 3);
+          console.log('trimmed_player_name: ['+trimmed_player_name+']');
+          save_highscore(player_score, trimmed_player_name);
+        }
+        break;
+      case 'highscores':
+        scoreTable = generate_score_table(get_highscores());
+        break;
+    }
   },
   render: function() { // render the game state
   }
