@@ -52,6 +52,24 @@ const { canvas } = init();
 initPointer();
 initKeys();
 
+// ------------ CONSTANT ------------
+const bold_font = 'bold 20px Arial, sans-serif';
+const normal_font = '20px Arial, sans-serif';
+const text_options = {
+  color: 'white',
+  font: normal_font
+};
+
+// ------------ Global ------------
+let tileEngine = [];
+let MAX_HIGH_SCORES = 5;
+let game_level = 1;
+let game_state = 'menu';
+let player_score = 0;
+let player_name = '';
+let is_name_entered = false;
+let current_level = 1;
+
 // ------------ functions toolbox ------------
 function dist(a,b){ let dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
@@ -319,6 +337,28 @@ let loop = GameLoop({  // create the main game loop
     }
   },
   render: function() { // render the game state
+    switch (game_state) {
+      case 'menu':
+        game_title.render();
+        start_menu.render();
+        break;
+      case 'play':
+        tileEngine.render();
+        break;
+      case 'gameover':
+        game_over.render();
+        start_again.render();
+        break;
+      case 'gamewon':
+        game_won.render();
+        start_again.render();
+        break;
+      case 'highscores':
+        highscores_title.render()
+        // Render the high score table
+        scoreTable.forEach(row => row.render());
+        break;
+    }
   }
 });
 
