@@ -64,7 +64,7 @@ const text_options = {
 let tileEngine = [];
 let MAX_HIGH_SCORES = 5;
 let game_level = 1;
-let game_state = 'menu';
+let game_state = 1; // 'menu' = 1, 'play' = 2, 'gameover' = 3, 'gamewon' = 4, 'highscores' = 5
 let player_score = 0;
 let player_name = '';
 let is_name_entered = false;
@@ -73,14 +73,12 @@ let current_level = 1;
 // ------------ functions toolbox ------------
 function dist(a,b){ let dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
 
-function is_last_level(level){
-  return level == number_of_levels ? true : false;
-}
+function is_last_level(level){ return level == number_of_levels;}
 
 onKey('r', function(e) {
   // return to the game menu
   console.log("r key pressed ! ");
-  game_state = 'menu';
+  game_state = 1;
   initGame('restart',current_level);
 });
 
@@ -104,6 +102,18 @@ function save_highscore(new_score, player_name) {
   localStorage.setItem('chromatic_crawl_highscores', JSON.stringify(highscores));
 }
 
+function mk_cell(text, x, y, font = normal_font) {
+  return Text({
+    text: text,
+    font: font,
+    color: 'white',
+    x: x,
+    y: y,
+    anchor: {x: 0.5, y: 0.5},
+    textAlign: 'center'
+  });
+}
+
 function generate_score_table(highscores) {
   let text_objects = [];
   let start_y = 160; // Starting Y position for the first row
@@ -116,80 +126,22 @@ function generate_score_table(highscores) {
   const scoreX = nameX+100;
 
   // Header row
-  text_objects.push(Text({
-    text: 'Rank',
-    font: '20px Arial',
-    color: 'white',
-    x: rankX,
-    y: start_y - 40,
-    anchor: {x: 0.5, y: 0.5},
-    textAlign: 'center'
-  }));
-  text_objects.push(Text({
-    text: 'Name',
-    font: '20px Arial',
-    color: 'white',
-    x: nameX,
-    y: start_y - 40,
-    anchor: {x: 0.5, y: 0.5},
-    textAlign: 'center'
-  }));
-  text_objects.push(Text({
-    text: 'Score',
-    font: '20px Arial',
-    color: 'white',
-    x: scoreX,
-    y: start_y - 40,
-    anchor: {x: 0.5, y: 0.5},
-    textAlign: 'center'
-  }));
+  text_objects.push(mk_cell('Rank',rankX,start_y - 40));
+  text_objects.push(mk_cell('Name',nameX,start_y - 40));
+  text_objects.push(mk_cell('Score',scoreX,start_y - 40));
 
   // Loop through high scores and create Text objects for each entry
   highscores.forEach((entry, index) => {
     let y_pos = start_y + (index * row_height);
     last_y_pos = y_pos;
 
-    text_objects.push(Text({
-      text: `${index + 1}`.padStart(3,'0'),  // Rank
-      font: '20px Arial',
-      color: 'white',
-      x: rankX,
-      y: y_pos,
-      anchor: {x: 0.5, y: 0.5},
-      textAlign: 'center'
-    }));
-
-    text_objects.push(Text({
-      text: entry.name,  // Player Name
-      font: '20px Arial',
-      color: 'white',
-      x: nameX,
-      y: y_pos,
-      anchor: {x: 0.5, y: 0.5},
-      textAlign: 'center'
-    }));
-
-    text_objects.push(Text({
-      text: entry.score.toString().padStart(3,'0'),  // Player Score
-      font: '20px Arial',
-      color: 'white',
-      x: scoreX,
-      y: y_pos,
-      anchor: {x: 0.5, y: 0.5},
-      textAlign: 'center'
-    }));
+    text_objects.push(mk_cell(`${index + 1}`.padStart(3,'0'),rankX,y_pos));  // Rank
+    text_objects.push(mk_cell(entry.name,nameX,y_pos));  // Player Name
+    text_objects.push(mk_cell(entry.score.toString().padStart(3,'0'),scoreX,y_pos));  // Player Score
   });
 
   // Add a message to restart a game
-  text_objects.push(Text({
-    text: 'Press [r] to restart',
-    font: 'bold 16px Arial',
-    color: 'white',
-    x: canvas.width/2,
-    y: last_y_pos + (row_height * 1.5),
-    anchor: {x: 0.5, y: 0.5},
-    textAlign: 'center'
-  }));
+  text_objects.push(mk_cell('Press [r] to restart',canvas.width/2,last_y_pos + (row_height * 1.5),bold_font));
 
   return text_objects;
 }
@@ -250,7 +202,7 @@ let start = Text({
   onDown: function() {
     // handle on down events on the sprite
     console.log("Clicked on Start");
-    game_state = 'play';
+    game_state = 2;
     game_points_multiplier = 0;
   },
   onOver: function() {
@@ -267,7 +219,7 @@ let highscore = Text({
   onDown: function() {
     // handle on down events on the sprite
     console.log("Clicked on High Score");
-    game_state = 'highscores';
+    game_state = 5;
   },
   onOver: function() {
     this.font = bold_font;
@@ -309,51 +261,53 @@ let loop = GameLoop({  // create the main game loop
   update: function() { // update the game state
     let highscores = [];
     switch (game_state) {
-      case 'menu':
+      case 1:
         break;
-      case 'play':
+      case 2:
         break;
-      case 'gameover':
+      case 3:
         game_over.update();
         // Check if player made a high score
         highscores = get_highscores();
         break;
-      case 'gamewon':
+      case 4:
         game_won.update();
         // Check if player made a high score
         highscores = get_highscores();
-        if (player_score > highscores[- 1]?.score || highscores.length < MAX_HIGH_SCORES) {
+        if (highscores.length < MAX_HIGH_SCORES || player_score > highscores[highscores.length - 1].score) {
           // Player has a high score, ask for their name
           let player_name = prompt('New High Score! Enter your nickname:');
-          console.log('player_name: ['+player_name+']');
+          //console.log('player_name: ['+player_name+']');
           let trimmed_player_name = player_name.substring(0, 3);
-          console.log('trimmed_player_name: ['+trimmed_player_name+']');
+          //console.log('trimmed_player_name: ['+trimmed_player_name+']');
           save_highscore(player_score, trimmed_player_name);
+          highscores = get_highscores();
+          game_state='menu';
         }
         break;
-      case 'highscores':
+      case 5:
         scoreTable = generate_score_table(get_highscores());
         break;
     }
   },
   render: function() { // render the game state
     switch (game_state) {
-      case 'menu':
+      case 1:
         game_title.render();
         start_menu.render();
         break;
-      case 'play':
+      case 2:
         tileEngine.render();
         break;
-      case 'gameover':
+      case 3:
         game_over.render();
         start_again.render();
         break;
-      case 'gamewon':
+      case 4:
         game_won.render();
         start_again.render();
         break;
-      case 'highscores':
+      case 5:
         highscores_title.render()
         // Render the high score table
         scoreTable.forEach(row => row.render());
