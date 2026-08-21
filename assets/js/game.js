@@ -1,3 +1,242 @@
+// ============================================================================
+// CHROMATIC CRAWL — Dungeon generation & rendering
+// Implements the Isaac "core algorithm" (boristhebrave.com write-up), scaled
+// down and adapted to the color-unlock / contact-combat design we settled on.
+//
+// Assumes it's loaded alongside your existing game.js, sharing the same
+// `kontra` globals (Sprite, GameLoop, Text, etc. destructured at the top of
+// game.js). Nothing here needs a spritesheet — rooms are drawn with flat
+// canvas rects, which keeps this cheap for the js13k byte budget and means
+// you can defer art entirely.
+// ============================================================================
+
+// ---- Grid addressing -------------------------------------------------------
+// id = x + y*10, exactly like Isaac. Keeps N/S/E/W as ±10/±1 with no bounds
+// checks needed, since ids from neighbouring "rows" never collide as long as
+// GRID_W stays under 10.
+const GRID_W = 9;
+const GRID_H = 8;
+const START_ID = 35; // roughly centered
+
+function idToXY(id) { return { x: id % 10, y: (id / 10) | 0 }; }
+function xyToId(x, y) { return x + y * 10; }
+function inBounds(x, y) { return x >= 1 && x < GRID_W && y >= 1 && y < GRID_H; }
+
+const DIRS = [
+  { dx: 0, dy: -1, name: 'n', opp: 's' },
+  { dx: 0, dy: 1, name: 's', opp: 'n' },
+  { dx: -1, dy: 0, name: 'w', opp: 'e' },
+  { dx: 1, dy: 0, name: 'e', opp: 'w' },
+];
+
+function countNeighbours(occupied, id) {
+  let { x, y } = idToXY(id);
+  let n = 0;
+  DIRS.forEach(d => { if (occupied.has(xyToId(x + d.dx, y + d.dy))) n++; });
+  return n;
+}
+
+// ---- Core BFS floorplan walk ------------------------------------------------
+function generateFloorplan(targetRooms) {
+  let occupied = new Map(); // id -> room stub
+  let queue = [START_ID];
+  let endRooms = [];
+
+  occupied.set(START_ID, { id: START_ID, doors: {} });
+
+  while (queue.length) {
+    let currentId = queue.shift();
+    let { x, y } = idToXY(currentId);
+    let addedAny = false;
+
+    // shuffle direction order so growth doesn't always favor N/S/W/E equally
+    let dirs = [...DIRS].sort(() => Math.random() - 0.5);
+
+    for (let d of dirs) {
+      if (occupied.size >= targetRooms) break;
+
+      let nx = x + d.dx, ny = y + d.dy;
+      if (!inBounds(nx, ny)) continue;
+      let nid = xyToId(nx, ny);
+
+      if (occupied.has(nid)) continue;                  // cell taken
+      if (countNeighbours(occupied, nid) > 1) continue;  // would create a loop
+      if (Math.random() < 0.5) continue;                 // organic shape
+
+      let room = { id: nid, doors: {} };
+      occupied.set(nid, room);
+      queue.push(nid);
+      addedAny = true;
+
+      occupied.get(currentId).doors[d.name] = nid;
+      room.doors[d.opp] = currentId;
+    }
+
+    if (!addedAny) endRooms.push(currentId);
+  }
+
+  return { occupied, endRooms };
+}
+
+// ---- Color / guardian assignment -------------------------------------------
+// One pickup room per rainbow color, tied to dead ends (matches the
+// "each color = one specific interaction" design). Boss/final guardian gets
+// the room furthest from start, same as Isaac's boss placement rule.
+const RAINBOW = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet'];
+
+function finalizeDungeon(occupied, endRooms) {
+  let rooms = Array.from(occupied.values());
+  let colorPool = [...RAINBOW].sort(() => Math.random() - 0.5);
+
+  rooms.forEach(r => { r.type = 'normal'; r.cleared = false; r.hasGuardian = false; });
+
+  let start = occupied.get(START_ID);
+  start.type = 'start';
+  start.cleared = true; // no guardian at the start
+
+  let bossId = endRooms[endRooms.length - 1];
+  let boss = occupied.get(bossId);
+  boss.type = 'boss';
+  boss.hasGuardian = true;
+  boss.color = colorPool.pop();
+
+  let otherEnds = endRooms.filter(id => id !== bossId && id !== START_ID);
+  otherEnds.forEach(id => {
+    if (!colorPool.length) return;
+    let r = occupied.get(id);
+    r.type = 'color';
+    r.hasGuardian = true;
+    r.color = colorPool.pop();
+  });
+
+  // small maps: if colors are still left over, drop them onto random
+  // ordinary rooms so every generated dungeon has the full rainbow
+  let normalRooms = rooms.filter(r => r.type === 'normal');
+  while (colorPool.length && normalRooms.length) {
+    let idx = (Math.random() * normalRooms.length) | 0;
+    let r = normalRooms.splice(idx, 1)[0];
+    r.type = 'color';
+    r.hasGuardian = true;
+    r.color = colorPool.pop();
+  }
+
+  return { rooms: occupied, startId: START_ID, bossId };
+}
+
+// ---- Public entry point, with retry-on-failure ------------------------------
+function generateDungeon(targetRooms = 13, maxAttempts = 60) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let { occupied, endRooms } = generateFloorplan(targetRooms);
+
+    if (occupied.size !== targetRooms) continue;
+
+    let bossId = endRooms[endRooms.length - 1];
+    if (bossId === undefined) continue;
+
+    let { x: bx, y: by } = idToXY(bossId);
+    let adjacentToStart = DIRS.some(d => xyToId(bx + d.dx, by + d.dy) === START_ID);
+    if (adjacentToStart) continue;
+
+    return finalizeDungeon(occupied, endRooms);
+  }
+
+  // Should be unreachable at 12-15 rooms on a 9x8 grid, but fall back rather
+  // than hang — accept whatever the last attempt produced.
+  console.warn('generateDungeon: hit maxAttempts, using last floorplan as-is');
+  let { occupied, endRooms } = generateFloorplan(targetRooms);
+  return finalizeDungeon(occupied, endRooms);
+}
+
+// ============================================================================
+// RENDERING
+// The canvas IS the current room — no camera scrolling. Each room is drawn
+// as a flat-colored floor with wall segments, and a gap left in the wall
+// wherever a door exists. Doors render red while the room is uncleared
+// (locked) and green once cleared (matches the "single boolean per room"
+// state model).
+// ============================================================================
+
+const WALL = 20;
+const DOOR_W = 70;
+
+function renderRoom(room, dungeon, canvas) {
+  let ctx = kontra.getContext();
+  let { width: w, height: h } = canvas;
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.fillStyle = room.color || '#3a3a3a';
+  ctx.fillRect(WALL, WALL, w - 2 * WALL, h - 2 * WALL);
+
+  Object.keys(room.doors).forEach(dir => {
+    ctx.fillStyle = room.cleared ? '#2ecc71' : '#c0392b';
+    drawDoorGap(ctx, dir, w, h);
+  });
+
+  if (room.hasGuardian && !room.cleared) {
+    // placeholder guardian marker until real sprites exist
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, 24, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawDoorGap(ctx, dir, w, h) {
+  switch (dir) {
+    case 'n': ctx.fillRect(w / 2 - DOOR_W / 2, 0, DOOR_W, WALL); break;
+    case 's': ctx.fillRect(w / 2 - DOOR_W / 2, h - WALL, DOOR_W, WALL); break;
+    case 'w': ctx.fillRect(0, h / 2 - DOOR_W / 2, WALL, DOOR_W); break;
+    case 'e': ctx.fillRect(w - WALL, h / 2 - DOOR_W / 2, WALL, DOOR_W); break;
+  }
+}
+
+// ---- Minimap ----------------------------------------------------------------
+// Cheap to add since room state is already {id, cleared, color}: just walk
+// the map and draw one small square per generated cell.
+function renderMinimap(dungeon, currentRoomId, x0 = 12, y0 = 12, cell = 10) {
+  let ctx = kontra.getContext();
+  dungeon.rooms.forEach(room => {
+    let { x, y } = idToXY(room.id);
+    ctx.fillStyle = room.id === currentRoomId
+      ? '#fff'
+      : room.cleared
+        ? (room.color || '#2ecc71')
+        : '#555';
+    ctx.fillRect(x0 + x * cell, y0 + y * cell, cell - 2, cell - 2);
+  });
+}
+
+// ============================================================================
+// ROOM TRANSITIONS
+// Doors only open once room.cleared is true. Walking into an open door swaps
+// currentRoomId and repositions the player at the opposite door — this is
+// the entire "camera" system, since the canvas never actually pans.
+// ============================================================================
+
+function tryMoveThroughDoor(dungeon, currentRoomId, dir) {
+  let room = dungeon.rooms.get(currentRoomId);
+  if (!room.cleared) return currentRoomId; // locked
+  let nextId = room.doors[dir];
+  if (nextId === undefined) return currentRoomId;
+  return nextId;
+}
+
+function opposite(dir) {
+  return { n: 's', s: 'n', e: 'w', w: 'e' }[dir];
+}
+
+function placePlayerAtDoor(player, dirEntered, canvas) {
+  const OFFSET = WALL + 16;
+  switch (dirEntered) {
+    case 'n': player.x = canvas.width / 2; player.y = canvas.height - OFFSET; break;
+    case 's': player.x = canvas.width / 2; player.y = OFFSET; break;
+    case 'e': player.x = OFFSET; player.y = canvas.height / 2; break;
+    case 'w': player.x = canvas.width - OFFSET; player.y = canvas.height / 2; break;
+  }
+}
+
 let { init, TileEngine, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, clamp, collides } = kontra;
 
 let // ZzFXMicro - Zuper Zmall Zound Zynth - v1.3.1 by Frank Force ~ 1000 bytes
@@ -61,7 +300,10 @@ const text_options = {
 };
 
 // ------------ Global ------------
-let tileEngine = [];
+//let tileEngine = [];
+let dungeon;
+let currentRoomId;
+let player = { x: 0, y: 0 };
 let MAX_HIGH_SCORES = 5;
 let game_level = 1;
 let game_state = 1; // 'menu' = 1, 'play' = 2, 'gameover' = 3, 'gamewon' = 4, 'highscores' = 5
@@ -116,6 +358,19 @@ onKey('r', function(e) {
   game_state = 1;
   initGame('restart',current_level);
 });
+
+onKey('arrowup',    () => moveThroughDoor('n'));
+onKey('arrowdown',  () => moveThroughDoor('s'));
+onKey('arrowleft',  () => moveThroughDoor('w'));
+onKey('arrowright', () => moveThroughDoor('e'));
+
+function moveThroughDoor(dir) {
+  let next = tryMoveThroughDoor(dungeon, currentRoomId, dir);
+  if (next !== currentRoomId) {
+    currentRoomId = next;
+    placePlayerAtDoor(player, opposite(dir), canvas);
+  }
+}
 
 function get_highscores() {
   // Retrieve scores from localStorage or return an empty array if not present
@@ -300,6 +555,10 @@ function initGame(reason,level) {
   }
   chrono.start();
   game_level = level;
+  dungeon = generateDungeon(13);
+  currentRoomId = dungeon.startId;
+  player.x = canvas.width / 2;
+  player.y = canvas.height / 2;
 }
 
 // Initialization of the game
@@ -347,7 +606,9 @@ let loop = GameLoop({  // create the main game loop
         start_menu.render();
         break;
       case 2:
-        tileEngine.render();
+        //tileEngine.render();
+        renderRoom(dungeon.rooms.get(currentRoomId), dungeon, canvas);
+        renderMinimap(dungeon, currentRoomId);
         break;
       case 3:
         game_over.render();
