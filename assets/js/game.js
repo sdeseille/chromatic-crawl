@@ -83,48 +83,30 @@ function generateFloorplan(targetRooms) {
 // "each color = one specific interaction" design). Boss/final guardian gets
 // the room furthest from start, same as Isaac's boss placement rule.
 const RAINBOW = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet'];
+const NUMBER_OF_LEVELS = RAINBOW.length; // 7
+function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 
-function finalizeDungeon(occupied, endRooms) {
+function finalizeDungeon(occupied, endRooms, levelColor) {
   let rooms = Array.from(occupied.values());
-  let colorPool = [...RAINBOW].sort(() => Math.random() - 0.5);
-
-  rooms.forEach(r => { r.type = 'normal'; r.cleared = false; r.hasGuardian = false; });
+  rooms.forEach(r => { r.type = 'normal'; r.cleared = true; r.hasGuardian = false; });
 
   let start = occupied.get(START_ID);
   start.type = 'start';
-  start.cleared = true; // no guardian at the start
+  start.cleared = true;
 
   let bossId = endRooms[endRooms.length - 1];
   let boss = occupied.get(bossId);
   boss.type = 'boss';
   boss.hasGuardian = true;
-  boss.color = colorPool.pop();
-
-  let otherEnds = endRooms.filter(id => id !== bossId && id !== START_ID);
-  otherEnds.forEach(id => {
-    if (!colorPool.length) return;
-    let r = occupied.get(id);
-    r.type = 'color';
-    r.hasGuardian = true;
-    r.color = colorPool.pop();
-  });
-
-  // small maps: if colors are still left over, drop them onto random
-  // ordinary rooms so every generated dungeon has the full rainbow
-  let normalRooms = rooms.filter(r => r.type === 'normal');
-  while (colorPool.length && normalRooms.length) {
-    let idx = (Math.random() * normalRooms.length) | 0;
-    let r = normalRooms.splice(idx, 1)[0];
-    r.type = 'color';
-    r.hasGuardian = true;
-    r.color = colorPool.pop();
-  }
+  boss.cleared = false;
+  boss.color = levelColor;
 
   return { rooms: occupied, startId: START_ID, bossId };
 }
 
 // ---- Public entry point, with retry-on-failure ------------------------------
-function generateDungeon(targetRooms = 13, maxAttempts = 60) {
+function generateDungeon(level, targetRooms = 13, maxAttempts = 60) {
+  let levelColor = colorForLevel(level);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let { occupied, endRooms } = generateFloorplan(targetRooms);
 
@@ -137,7 +119,7 @@ function generateDungeon(targetRooms = 13, maxAttempts = 60) {
     let adjacentToStart = DIRS.some(d => xyToId(bx + d.dx, by + d.dy) === START_ID);
     if (adjacentToStart) continue;
 
-    return finalizeDungeon(occupied, endRooms);
+    return finalizeDungeon(occupied, endRooms, levelColor);
   }
 
   // Should be unreachable at 12-15 rooms on a 9x8 grid, but fall back rather
@@ -236,6 +218,48 @@ function placePlayerAtDoor(player, dirEntered, canvas) {
     case 'w': player.x = canvas.width - OFFSET; player.y = canvas.height / 2; break;
   }
 }
+
+let collected_colors = [];
+
+function checkGuardianContact() {
+  if (game_state !== 2) return;
+  let room = dungeon.rooms.get(currentRoomId);
+  if (!room.hasGuardian || room.cleared) return;
+
+  let center = { x: canvas.width / 2, y: canvas.height / 2 };
+  if (dist(player, center) < 40) { // guardian marker radius (24) + player reach
+    defeatGuardian(room);
+  }
+}
+
+function defeatGuardian(room) {
+  room.cleared = true;
+  room.hasGuardian = false;
+  playSound('squash');
+
+  if (room.type === 'boss') {
+    collectColor(room.color);
+  } else {
+    player_score += 50; // minor room, tune later
+  }
+}
+
+function collectColor(color) {
+  collected_colors.push(color);
+  player_score += 100 + computeTimeBonus(chrono.getElapsed());
+  playSound('pickup');
+  advanceOrWin();
+}
+
+function advanceOrWin() {
+  if (current_level >= NUMBER_OF_LEVELS) {
+    game_state = 4; // gamewon
+  } else {
+    current_level++;
+    initGame('nextlevel', current_level);
+  }
+}
+
 
 let { init, TileEngine, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, clamp, collides } = kontra;
 
@@ -350,7 +374,7 @@ function computeTimeBonus(seconds) {
   return Math.max(0, Math.round(1000 * (60 - t) / 60));
 }
 
-function is_last_level(level){ return level == number_of_levels;}
+function is_last_level(level){ return level == NUMBER_OF_LEVELS;}
 
 onKey('r', function(e) {
   // return to the game menu
@@ -552,10 +576,18 @@ function initGame(reason,level) {
     player_score = 0;
     player_name = '';
     is_name_entered = false;
-  }
+    collected_colors = [];
+  } else if (reason == 'nextlevel'){
+    game_level = level;
+    dungeon = generateDungeon(level);
+    currentRoomId = dungeon.startId;
+    player.x = canvas.width / 2;
+    player.y = canvas.height / 2;
+  };
+
   chrono.start();
   game_level = level;
-  dungeon = generateDungeon(13);
+  dungeon = generateDungeon(level);
   currentRoomId = dungeon.startId;
   player.x = canvas.width / 2;
   player.y = canvas.height / 2;
@@ -573,6 +605,7 @@ let loop = GameLoop({  // create the main game loop
       case 1:
         break;
       case 2:
+        checkGuardianContact();
         break;
       case 3:
         game_over.update();
