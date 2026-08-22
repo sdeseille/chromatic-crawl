@@ -159,11 +159,16 @@ function renderRoom(room, dungeon, canvas) {
   });
 
   if (room.hasGuardian && !room.cleared) {
-    // placeholder guardian marker until real sprites exist
-    ctx.fillStyle = '#000';
-    ctx.beginPath();
-    ctx.arc(w / 2, h / 2, 24, 0, Math.PI * 2);
-    ctx.fill();
+    if (guardianSprite) {
+      guardianSprite.x = w / 2;
+      guardianSprite.y = h / 2;
+      guardianSprite.render();
+    } else {
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 24, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
@@ -197,10 +202,17 @@ function renderMinimap(dungeon, currentRoomId, x0 = 12, y0 = 12, cell = 10) {
 // free movement inside a room visible/testable.
 function renderPlayer() {
   let ctx = kontra.getContext();
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
-  ctx.fill();
+  if (!playerSprite) {
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  playerSprite.x = player.x;
+  playerSprite.y = player.y;
+  playerSprite.scaleX = playerFacingLeft ? -1 : 1;
+  playerSprite.render();
 }
 
 // ============================================================================
@@ -264,19 +276,36 @@ function checkDoorCrossing(room, canvas) {
 function updatePlayer() {
   let dx = keyPressed('arrowright') - keyPressed('arrowleft');
   let dy = keyPressed('arrowdown') - keyPressed('arrowup');
-  if (!dx && !dy) return;
+  let moving = dx || dy;
 
-  if (dx && dy) { dx *= 0.7071; dy *= 0.7071; } // keep diagonal speed consistent
+  updatePlayerAnimation(moving, dx);
+  if (!moving) return;
 
+  if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
   let room = dungeon.rooms.get(currentRoomId);
   let nx = player.x + dx * PLAYER_SPEED;
   let ny = player.y + dy * PLAYER_SPEED;
-
-  // resolve each axis independently so sliding along a wall still works
   if (dx && !isBlockedByWall(nx, player.y, room, canvas)) player.x = nx;
   if (dy && !isBlockedByWall(player.x, ny, room, canvas)) player.y = ny;
-
   checkDoorCrossing(room, canvas);
+}
+
+function updatePlayerAnimation(moving, dx) {
+  if (!playerSprite) return;
+  if (dx) playerFacingLeft = dx < 0;
+  if (moving) {
+    if (playerSprite.currentAnimation.isStopped) playerSprite.currentAnimation.start();
+  } else if (!playerSprite.currentAnimation.isStopped) {
+    playerSprite.currentAnimation.stop();
+    playerSprite.currentAnimation.reset();
+  }
+  playerSprite.update();
+}
+
+function updateGuardianAnimation() {
+  if (!guardianSprite) return;
+  let room = dungeon.rooms.get(currentRoomId);
+  if (room.hasGuardian && !room.cleared) guardianSprite.update();
 }
 
 function placePlayerAtDoor(player, dirEntered, canvas) {
@@ -331,7 +360,7 @@ function advanceOrWin() {
 }
 
 
-let { init, TileEngine, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, clamp, collides } = kontra;
+let { init, TileEngine, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, clamp, collides, SpriteSheet, loadImage } = kontra;
 
 let // ZzFXMicro - Zuper Zmall Zound Zynth - v1.3.1 by Frank Force ~ 1000 bytes
 zzfxV=.3,               // volume
@@ -384,6 +413,43 @@ function playSound(type){
 const { canvas } = init();
 initPointer();
 initKeys();
+
+// ------------ LOAD SPRITESHEETS ------------
+
+const IMG_PATH = 'assets/img/';   // ← adjust if your art lives elsewhere
+const PLAYER_SPRITE_SIZE = 28;
+const GUARDIAN_SPRITE_SIZE = 48;
+
+let playerSprite = null;
+let guardianSprite = null;
+let playerFacingLeft = false;
+
+loadImage(IMG_PATH + 'piskel-unicorn.png').then(img => {
+  let sheet = SpriteSheet({
+    image: img, frameWidth: 16, frameHeight: 16,
+    animations: { walk: { frames: '0..3', frameRate: 8, loop: true } }
+  });
+  playerSprite = Sprite({
+    anchor: { x: 0.5, y: 0.5 },
+    width: PLAYER_SPRITE_SIZE, height: PLAYER_SPRITE_SIZE,
+    animations: sheet.animations
+  });
+  playerSprite.playAnimation('walk');
+  playerSprite.currentAnimation.stop(); // idle on frame 0 until moving
+});
+
+loadImage(IMG_PATH + 'creature-sheet.png').then(img => {
+  let sheet = SpriteSheet({
+    image: img, frameWidth: 24, frameHeight: 24,
+    animations: { idle: { frames: '0..3', frameRate: 6, loop: true } }
+  });
+  guardianSprite = Sprite({
+    anchor: { x: 0.5, y: 0.5 },
+    width: GUARDIAN_SPRITE_SIZE, height: GUARDIAN_SPRITE_SIZE,
+    animations: sheet.animations
+  });
+  guardianSprite.playAnimation('idle');
+});
 
 // ------------ CONSTANT ------------
 const bold_font = 'bold 20px Arial, sans-serif';
@@ -690,6 +756,7 @@ let loop = GameLoop({  // create the main game loop
       case 2:
         updatePlayer();
         checkGuardianContact();
+        updateGuardianAnimation();
         break;
       case 3:
         game_over.update();
