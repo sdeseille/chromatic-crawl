@@ -140,6 +140,8 @@ function generateDungeon(level, targetRooms = 13, maxAttempts = 60) {
 
 const WALL = 20;
 const DOOR_W = 70;
+const PLAYER_SIZE = 14;   // half-width/half-height, used for wall & door collision
+const PLAYER_SPEED = 3;   // pixels per fixed update tick (60/s)
 
 function renderRoom(room, dungeon, canvas) {
   let ctx = kontra.getContext();
@@ -190,6 +192,17 @@ function renderMinimap(dungeon, currentRoomId, x0 = 12, y0 = 12, cell = 10) {
   });
 }
 
+// ---- Player ------------------------------------------------------------
+// Placeholder circle until a real sprite exists — the point is to make
+// free movement inside a room visible/testable.
+function renderPlayer() {
+  let ctx = kontra.getContext();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 // ============================================================================
 // ROOM TRANSITIONS
 // Doors only open once room.cleared is true. Walking into an open door swaps
@@ -207,6 +220,63 @@ function tryMoveThroughDoor(dungeon, currentRoomId, dir) {
 
 function opposite(dir) {
   return { n: 's', s: 'n', e: 'w', w: 'e' }[dir];
+}
+
+// Would placing the player's center at (x, y) push it into a solid wall
+// segment? A door only counts as "open" (non-solid) when the room owns a
+// door in that direction AND that door is unlocked (room.cleared).
+function isBlockedByWall(x, y, room, canvas) {
+  let { width: w, height: h } = canvas;
+  let inDoorX = Math.abs(x - w / 2) < (DOOR_W / 2 - PLAYER_SIZE);
+  let inDoorY = Math.abs(y - h / 2) < (DOOR_W / 2 - PLAYER_SIZE);
+
+  let openN = room.doors.n && room.cleared && inDoorX;
+  let openS = room.doors.s && room.cleared && inDoorX;
+  let openW = room.doors.w && room.cleared && inDoorY;
+  let openE = room.doors.e && room.cleared && inDoorY;
+
+  if (y - PLAYER_SIZE < WALL && !openN) return true;
+  if (y + PLAYER_SIZE > h - WALL && !openS) return true;
+  if (x - PLAYER_SIZE < WALL && !openW) return true;
+  if (x + PLAYER_SIZE > w - WALL && !openE) return true;
+  return false;
+}
+
+// Has the player fully crossed an (open) door threshold and left the room's
+// bounds? If so, switch rooms and place them just inside the door they
+// entered from — this replaces the old "arrow key = instant room jump".
+function checkDoorCrossing(room, canvas) {
+  let { width: w, height: h } = canvas;
+  let dir = null;
+  if (player.y < WALL) dir = 'n';
+  else if (player.y > h - WALL) dir = 's';
+  else if (player.x < WALL) dir = 'w';
+  else if (player.x > w - WALL) dir = 'e';
+
+  if (!dir || !room.doors[dir]) return;
+
+  currentRoomId = room.doors[dir];
+  placePlayerAtDoor(player, dir, canvas);
+}
+
+// Continuous, free movement inside the current room. Called every fixed
+// update tick while game_state == 2 (play).
+function updatePlayer() {
+  let dx = keyPressed('arrowright') - keyPressed('arrowleft');
+  let dy = keyPressed('arrowdown') - keyPressed('arrowup');
+  if (!dx && !dy) return;
+
+  if (dx && dy) { dx *= 0.7071; dy *= 0.7071; } // keep diagonal speed consistent
+
+  let room = dungeon.rooms.get(currentRoomId);
+  let nx = player.x + dx * PLAYER_SPEED;
+  let ny = player.y + dy * PLAYER_SPEED;
+
+  // resolve each axis independently so sliding along a wall still works
+  if (dx && !isBlockedByWall(nx, player.y, room, canvas)) player.x = nx;
+  if (dy && !isBlockedByWall(player.x, ny, room, canvas)) player.y = ny;
+
+  checkDoorCrossing(room, canvas);
 }
 
 function placePlayerAtDoor(player, dirEntered, canvas) {
@@ -376,25 +446,38 @@ function computeTimeBonus(seconds) {
 
 function is_last_level(level){ return level == NUMBER_OF_LEVELS;}
 
-onKey('r', function(e) {
-  // return to the game menu
-  console.log("r key pressed ! ");
-  game_state = 1;
-  initGame('restart',current_level);
+// Shared handler for every a-z key. During name entry (game_state 6) each
+// letter appends to player_name (max 3 chars, matching the classic
+// arcade-initials convention already used by save_highscore's truncation).
+// Outside name entry, only 'r' does anything — it restarts, same as before.
+function handleLetterKey(letter) {
+  return function () {
+    if (game_state === 6) {
+      if (player_name.length < 3) player_name += letter;
+      return;
+    }
+    if (letter === 'r') {
+      console.log("r key pressed ! ");
+      game_state = 1;
+      initGame('restart', current_level);
+    }
+  };
+}
+'abcdefghijklmnopqrstuvwxyz'.split('').forEach(letter => onKey(letter, handleLetterKey(letter)));
+
+onKey('esc', () => { if (game_state === 6) player_name = ''; }); // clear a mistyped name
+onKey('enter', () => {
+  if (game_state === 6 && player_name.length > 0) {
+    save_highscore(player_score, player_name.toUpperCase());
+    game_state = 5; // show the updated highscore table
+  }
 });
 
-onKey('arrowup',    () => moveThroughDoor('n'));
-onKey('arrowdown',  () => moveThroughDoor('s'));
-onKey('arrowleft',  () => moveThroughDoor('w'));
-onKey('arrowright', () => moveThroughDoor('e'));
-
-function moveThroughDoor(dir) {
-  let next = tryMoveThroughDoor(dungeon, currentRoomId, dir);
-  if (next !== currentRoomId) {
-    currentRoomId = next;
-    placePlayerAtDoor(player, opposite(dir), canvas);
-  }
-}
+// NOTE: tryMoveThroughDoor() and moveThroughDoor() (further up the file, in
+// the ROOM TRANSITIONS section) are no longer called anywhere — replaced by
+// checkDoorCrossing()/updatePlayer(). Left in place rather than deleted,
+// since you may still want tryMoveThroughDoor's "locked door" semantics
+// elsewhere (e.g. a minimap click-to-travel feature). Safe to remove if not.
 
 function get_highscores() {
   // Retrieve scores from localStorage or return an empty array if not present
@@ -605,6 +688,7 @@ let loop = GameLoop({  // create the main game loop
       case 1:
         break;
       case 2:
+        updatePlayer();
         checkGuardianContact();
         break;
       case 3:
@@ -616,20 +700,20 @@ let loop = GameLoop({  // create the main game loop
         game_won.update();
         // Check if player made a high score
         highscores = get_highscores();
-        if (highscores.length < MAX_HIGH_SCORES || player_score > highscores[highscores.length - 1].score) {
-          // Player has a high score, ask for their name
-          let player_name = prompt('New High Score! Enter your nickname:');
-          //console.log('player_name: ['+player_name+']');
-          let trimmed_player_name = player_name.substring(0, 3);
-          //console.log('trimmed_player_name: ['+trimmed_player_name+']');
-          save_highscore(player_score, trimmed_player_name);
-          highscores = get_highscores();
-          game_state='menu';
+        if (!is_name_entered && (highscores.length < MAX_HIGH_SCORES || player_score > highscores[highscores.length - 1].score)) {
+          // Player has a high score — collect their name via in-canvas
+          // entry instead of prompt(), which is blocked in the sandboxed
+          // iframe js13k entries are played in.
+          player_name = '';
+          is_name_entered = true; // guards against re-triggering every frame
+          game_state = 6;
         }
         break;
       case 5:
         scoreTable = generate_score_table(get_highscores());
         break;
+      case 6:
+        break; // fully driven by onKey handlers; nothing to poll each tick
     }
   },
   render: function() { // render the game state
@@ -641,6 +725,7 @@ let loop = GameLoop({  // create the main game loop
       case 2:
         //tileEngine.render();
         renderRoom(dungeon.rooms.get(currentRoomId), dungeon, canvas);
+        renderPlayer();
         renderMinimap(dungeon, currentRoomId);
         break;
       case 3:
@@ -655,6 +740,11 @@ let loop = GameLoop({  // create the main game loop
         highscores_title.render()
         // Render the high score table
         scoreTable.forEach(row => row.render());
+        break;
+      case 6:
+        mk_cell('New High Score!', canvas.width/2, 120, bold_font).render();
+        mk_cell('Type up to 3 letters, Enter to confirm (Esc to clear)', canvas.width/2, 160).render();
+        mk_cell(player_name.toUpperCase(), canvas.width/2, 210, bold_font).render();
         break;
     }
   }
