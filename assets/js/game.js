@@ -86,9 +86,123 @@ const RAINBOW = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet']
 const NUMBER_OF_LEVELS = RAINBOW.length; // 7
 function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 
+// ---- Room floor textures ----------------------------------------------------
+// Purely decorative, drawn straight onto the canvas floor rect — no new
+// image assets, so this stays cheap for the js13k byte budget.
+//
+// Which pattern a room gets is rolled ONCE, at generation time
+// (finalizeDungeon → pickTexture), and stored on the room as room.texture.
+// Rendering must NOT re-roll Math.random() here: renderRoom() runs every
+// tick via the main GameLoop, and re-rolling per frame would make the
+// pattern flicker instead of reading as a fixed floor. The draw functions
+// below are deterministic given (fx, fy, fw, fh, room.color) — the only
+// randomness in the whole feature is "which of these functions runs".
+const TEXTURES = ['plain', 'dots', 'brick', 'grid', 'diagonal'];
+
+function pickTexture() {
+  return TEXTURES[(Math.random() * TEXTURES.length) | 0];
+}
+
+// Lighten ('amt' > 0) or darken ('amt' < 0) a '#rrggbb' color. Rooms that
+// haven't been given an explicit color yet fall back to the same neutral
+// grey renderRoom() already uses for the floor fill.
+function shadeColor(hex, amt) {
+  let n = parseInt((hex || '#3a3a3a').slice(1), 16);
+  let r = clampByte((n >> 16) + amt);
+  let g = clampByte(((n >> 8) & 255) + amt);
+  let b = clampByte((n & 255) + amt);
+  return '#' + (1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1);
+}
+function clampByte(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+// fx/fy/fw/fh describe the floor rect (inside the walls) that renderRoom()
+// already fills with the base color — this just layers a pattern on top,
+// clipped so it can never bleed over the walls or into a door gap.
+function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
+  if (!room.texture || room.texture === 'plain') return;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(fx, fy, fw, fh);
+  ctx.clip();
+
+  let light = shadeColor(room.color, 18);
+  let dark = shadeColor(room.color, -18);
+
+  switch (room.texture) {
+    case 'dots':
+      ctx.fillStyle = dark;
+      for (let y = fy + 12; y < fy + fh; y += 24) {
+        for (let x = fx + 12; x < fx + fw; x += 24) {
+          ctx.beginPath();
+          ctx.arc(x, y, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      break;
+
+    case 'brick': {
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 1;
+      let bw = 32, bh = 16;
+      for (let y = fy, row = 0; y < fy + fh; y += bh, row++) {
+        ctx.beginPath();
+        ctx.moveTo(fx, y);
+        ctx.lineTo(fx + fw, y);
+        ctx.stroke();
+
+        let offset = (row % 2) * (bw / 2);
+        for (let x = fx + offset; x < fx + fw; x += bw) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, y + bh);
+          ctx.stroke();
+        }
+      }
+      break;
+    }
+
+    case 'grid':
+      ctx.strokeStyle = light;
+      ctx.lineWidth = 1;
+      for (let x = fx; x < fx + fw; x += 20) {
+        ctx.beginPath();
+        ctx.moveTo(x, fy);
+        ctx.lineTo(x, fy + fh);
+        ctx.stroke();
+      }
+      for (let y = fy; y < fy + fh; y += 20) {
+        ctx.beginPath();
+        ctx.moveTo(fx, y);
+        ctx.lineTo(fx + fw, y);
+        ctx.stroke();
+      }
+      break;
+
+    case 'diagonal':
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 1;
+      for (let x = fx - fh; x < fx + fw; x += 18) {
+        ctx.beginPath();
+        ctx.moveTo(x, fy);
+        ctx.lineTo(x + fh, fy + fh);
+        ctx.stroke();
+      }
+      break;
+  }
+
+  ctx.restore();
+}
+
 function finalizeDungeon(occupied, endRooms, levelColor) {
   let rooms = Array.from(occupied.values());
-  rooms.forEach(r => { r.type = 'normal'; r.cleared = true; r.hasGuardian = false; r.enemies = []; });
+  rooms.forEach(r => {
+    r.type = 'normal';
+    r.cleared = true;
+    r.hasGuardian = false;
+    r.enemies = [];
+    r.texture = pickTexture();
+  });
 
   let start = occupied.get(START_ID);
   start.type = 'start';
@@ -160,8 +274,10 @@ function renderRoom(room, dungeon, canvas) {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, w, h);
 
+  let fx = WALL, fy = WALL, fw = w - 2 * WALL, fh = h - 2 * WALL;
   ctx.fillStyle = room.color || '#3a3a3a';
-  ctx.fillRect(WALL, WALL, w - 2 * WALL, h - 2 * WALL);
+  ctx.fillRect(fx, fy, fw, fh);
+  drawFloorTexture(ctx, room, fx, fy, fw, fh);
 
   Object.keys(room.doors).forEach(dir => {
     ctx.fillStyle = room.cleared ? '#2ecc71' : '#c0392b';
