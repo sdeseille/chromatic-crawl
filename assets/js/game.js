@@ -88,7 +88,7 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 
 function finalizeDungeon(occupied, endRooms, levelColor) {
   let rooms = Array.from(occupied.values());
-  rooms.forEach(r => { r.type = 'normal'; r.cleared = true; r.hasGuardian = false; });
+  rooms.forEach(r => { r.type = 'normal'; r.cleared = true; r.hasGuardian = false; r.enemies = []; });
 
   let start = occupied.get(START_ID);
   start.type = 'start';
@@ -100,6 +100,16 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
   boss.hasGuardian = true;
   boss.cleared = false;
   boss.color = levelColor;
+
+  // Palette-swapped enemy archetypes: every normal room has a coin-flip
+  // chance of one enemy, tinted to this level's rainbow color. Doesn't touch
+  // room.cleared — these are roaming hazards in already-open rooms, not a
+  // new lock/clear gate.
+  rooms.forEach(r => {
+    if (r.type === 'normal' && Math.random() < 0.5) {
+      r.enemies.push(spawnEnemy(levelColor));
+    }
+  });
 
   return { rooms: occupied, startId: START_ID, bossId };
 }
@@ -359,6 +369,150 @@ function advanceOrWin() {
   }
 }
 
+// ============================================================================
+// ENEMIES — palette-swapped archetypes sharing one spritesheet
+// Every enemy (and the boss guardian) reuses creature-sheet.png. The only
+// thing that changes per biome/level is a tint baked once into an offscreen
+// canvas: multiply the sheet by the biome color (keeps shading/silhouette),
+// then destination-in against the original alpha so the tint never bleeds
+// past the sprite. Because Kontra's SpriteSheet only ever does
+// ctx.drawImage(spriteSheet.image, ...), a <canvas> is a drop-in replacement
+// for the <img> — nothing downstream (Sprite, animations, render) changes.
+// ============================================================================
+
+const ENEMY_TINTS = {
+  red: '#c0392b', orange: '#e07b1a', yellow: '#d4b106',
+  green: '#2ecc71', blue: '#2f6fd1', indigo: '#4b3fae', violet: '#9b3fd1',
+};
+
+let tintedSheetCache = new Map(); // color -> offscreen canvas, built once and reused
+
+function getTintedSheet(color) {
+  if (!creatureBaseImg) return null; // sheet still loading — caller falls back
+  let cached = tintedSheetCache.get(color);
+  if (cached) return cached;
+
+  let w = creatureBaseImg.width, h = creatureBaseImg.height;
+  let off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  let octx = off.getContext('2d');
+
+  octx.drawImage(creatureBaseImg, 0, 0);
+  octx.globalCompositeOperation = 'multiply';
+  octx.fillStyle = ENEMY_TINTS[color] || '#ffffff';
+  octx.fillRect(0, 0, w, h);
+  octx.globalCompositeOperation = 'destination-in';
+  octx.drawImage(creatureBaseImg, 0, 0);
+  octx.globalCompositeOperation = 'source-over';
+
+  tintedSheetCache.set(color, off);
+  return off;
+}
+
+// Builds a normal kontra Sprite wired to the tinted sheet. Used for the boss
+// guardian too (see the creature-sheet loadImage callback below), so a
+// guardian and a regular enemy are visually the same recolor pipeline, just
+// different sizes.
+function makeCreatureSprite(color, size) {
+  let img = getTintedSheet(color);
+  if (!img) return null;
+  let sheet = SpriteSheet({
+    image: img, frameWidth: 24, frameHeight: 24,
+    animations: { idle: { frames: '0..3', frameRate: 6, loop: true } }
+  });
+  let s = Sprite({
+    anchor: { x: 0.5, y: 0.5 },
+    width: size, height: size,
+    animations: sheet.animations
+  });
+  s.playAnimation('idle');
+  return s;
+}
+
+// ---- Archetypes --------------------------------------------------------
+// Same recolored sprite for all three — the movement pattern is the visual
+// "tell": chaser beelines for the player, patroller drifts back and forth
+// around its spawn point, stationary just idles in place.
+const ENEMY_SIZE = 32;
+const ENEMY_SPEED = { chaser: 1.6, patroller: 1.1, stationary: 0 };
+const ARCHETYPES = ['chaser', 'stationary', 'patroller'];
+
+function spawnEnemy(color) {
+  let x = canvas.width / 2 + (Math.random() * 160 - 80);
+  let y = canvas.height / 2 + (Math.random() * 100 - 50);
+  let type = ARCHETYPES[(Math.random() * ARCHETYPES.length) | 0];
+  return {
+    type, color, x, y, homeX: x, homeY: y,
+    dir: Math.random() < 0.5 ? 1 : -1,
+    speed: ENEMY_SPEED[type],
+    sprite: null, // built lazily once creatureBaseImg has finished loading
+    alive: true,
+  };
+}
+
+function updateEnemy(e, room) {
+  if (!e.alive) return;
+  if (e.type === 'chaser') {
+    let dx = player.x - e.x, dy = player.y - e.y;
+    let len = Math.hypot(dx, dy) || 1;
+    let nx = e.x + (dx / len) * e.speed;
+    let ny = e.y + (dy / len) * e.speed;
+    if (!isBlockedByWall(nx, e.y, room, canvas)) e.x = nx;
+    if (!isBlockedByWall(e.x, ny, room, canvas)) e.y = ny;
+  } else if (e.type === 'patroller') {
+    let nx = e.x + e.speed * e.dir;
+    if (isBlockedByWall(nx, e.y, room, canvas) || Math.abs(nx - e.homeX) > 70) {
+      e.dir *= -1;
+    } else {
+      e.x = nx;
+    }
+  }
+  e.sprite?.currentAnimation?.update();
+}
+
+function renderEnemy(e) {
+  if (!e.alive) return;
+  if (!e.sprite) e.sprite = makeCreatureSprite(e.color, ENEMY_SIZE);
+  if (e.sprite) {
+    e.sprite.x = e.x;
+    e.sprite.y = e.y;
+    e.sprite.render();
+    return;
+  }
+  // Fallback while creature-sheet.png is still loading.
+  let ctx = kontra.getContext();
+  ctx.fillStyle = ENEMY_TINTS[e.color] || '#888';
+  ctx.beginPath();
+  ctx.arc(e.x, e.y, ENEMY_SIZE / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Contact resolution is a placeholder — wire this into whatever
+// ability/damage system you land on. For now, touching an enemy just
+// removes it, matching the "contact/ability-based, no aimed shooting" design.
+function checkEnemyContact(room) {
+  if (!room.enemies) return;
+  room.enemies.forEach(e => {
+    if (e.alive && dist(player, e) < ENEMY_SIZE / 2 + PLAYER_SIZE) {
+      e.alive = false;
+      playSound('squash');
+    }
+  });
+}
+
+function updateEnemies() {
+  let room = dungeon.rooms.get(currentRoomId);
+  if (!room.enemies) return;
+  room.enemies.forEach(e => updateEnemy(e, room));
+  checkEnemyContact(room);
+}
+
+function renderEnemies() {
+  let room = dungeon.rooms.get(currentRoomId);
+  if (!room.enemies) return;
+  room.enemies.forEach(renderEnemy);
+}
+
 
 let { init, TileEngine, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, clamp, collides, SpriteSheet, loadImage } = kontra;
 
@@ -423,6 +577,7 @@ const GUARDIAN_SPRITE_SIZE = 48;
 let playerSprite = null;
 let guardianSprite = null;
 let playerFacingLeft = false;
+let creatureBaseImg = null; // raw, untinted creature-sheet — every enemy/guardian recolors from this one image
 
 loadImage(IMG_PATH + 'piskel-unicorn.png').then(img => {
   let sheet = SpriteSheet({
@@ -439,16 +594,8 @@ loadImage(IMG_PATH + 'piskel-unicorn.png').then(img => {
 });
 
 loadImage(IMG_PATH + 'creature-sheet.png').then(img => {
-  let sheet = SpriteSheet({
-    image: img, frameWidth: 24, frameHeight: 24,
-    animations: { idle: { frames: '0..3', frameRate: 6, loop: true } }
-  });
-  guardianSprite = Sprite({
-    anchor: { x: 0.5, y: 0.5 },
-    width: GUARDIAN_SPRITE_SIZE, height: GUARDIAN_SPRITE_SIZE,
-    animations: sheet.animations
-  });
-  guardianSprite.playAnimation('idle');
+  creatureBaseImg = img;
+  guardianSprite = makeCreatureSprite('violet', GUARDIAN_SPRITE_SIZE);
 });
 
 // ------------ CONSTANT ------------
@@ -757,6 +904,7 @@ let loop = GameLoop({  // create the main game loop
         updatePlayer();
         checkGuardianContact();
         updateGuardianAnimation();
+        updateEnemies();
         break;
       case 3:
         game_over.update();
@@ -793,6 +941,7 @@ let loop = GameLoop({  // create the main game loop
         //tileEngine.render();
         renderRoom(dungeon.rooms.get(currentRoomId), dungeon, canvas);
         renderPlayer();
+        renderEnemies();
         renderMinimap(dungeon, currentRoomId);
         break;
       case 3:
