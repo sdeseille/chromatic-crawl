@@ -296,7 +296,7 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
     r.enemies = [];
     r.texture = pickTexture();
     if (r.texture === 'stone') {
-      r.stoneTiles = buildStoneTiles(canvas.width - 2 * WALL, canvas.height - 2 * WALL);
+      r.stoneTiles = buildStoneTiles(roomView.width - 2 * WALL, roomView.height - 2 * WALL);
     }
   });
 
@@ -362,6 +362,7 @@ const WALL = 20;
 const DOOR_W = 70;
 const PLAYER_SIZE = 14;   // half-width/half-height, used for wall & door collision
 const PLAYER_SPEED = 3;   // pixels per fixed update tick (60/s)
+const BANNER_H = 90; // top HUD banner — 1/4 of the 360px canvas height
 
 function renderRoom(room, dungeon, canvas) {
   let ctx = kontra.getContext();
@@ -438,6 +439,70 @@ function renderPlayer() {
 }
 
 // ============================================================================
+// HUD BANNER — top 90px. Drawn un-translated (real canvas coords), separate
+// from the room, which is drawn via ctx.translate(0, BANNER_H) below.
+// ============================================================================
+function renderBanner() {
+  let ctx = kontra.getContext();
+  ctx.save();
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, BANNER_H);
+  ctx.strokeStyle = '#333';
+  ctx.beginPath();
+  ctx.moveTo(0, BANNER_H);
+  ctx.lineTo(canvas.width, BANNER_H);
+  ctx.stroke();
+  ctx.restore();
+
+  renderLevelAndHealth();
+  renderTimer();
+
+  const MM_CELL = 8;
+  const mmW = GRID_W * MM_CELL, mmH = GRID_H * MM_CELL;
+  renderMinimap(
+    dungeon, currentRoomId,
+    canvas.width - mmW - 14,
+    (BANNER_H - mmH) / 2,
+    MM_CELL
+  );
+}
+
+function renderLevelAndHealth() {
+  let ctx = kontra.getContext();
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'white';
+
+  ctx.font = 'bold 18px Arial, sans-serif';
+  ctx.fillText('Lvl ' + current_level, 16, BANNER_H / 2 - 12);
+
+  ctx.font = '18px Arial, sans-serif';
+  let hearts = '';
+  for (let i = 0; i < MAX_HEALTH; i++) hearts += i < player_health ? '❤️' : '🤍';
+  ctx.fillText(hearts, 16, BANNER_H / 2 + 14);
+  ctx.restore();
+}
+
+function renderTimer() {
+  let ctx = kontra.getContext();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 26px Arial, sans-serif';
+  ctx.fillText(formatTime(chrono.getElapsed()), canvas.width / 2, BANNER_H / 2);
+  ctx.restore();
+}
+
+function formatTime(seconds) {
+  let s = Math.max(0, seconds | 0);
+  let m = (s / 60) | 0;
+  let r = s % 60;
+  return m + ':' + (r < 10 ? '0' : '') + r;
+}
+
+// ============================================================================
 // ROOM TRANSITIONS
 // Doors only open once room.cleared is true. Walking into an open door swaps
 // currentRoomId and repositions the player at the opposite door — this is
@@ -507,9 +572,9 @@ function updatePlayer() {
   let room = dungeon.rooms.get(currentRoomId);
   let nx = player.x + dx * PLAYER_SPEED;
   let ny = player.y + dy * PLAYER_SPEED;
-  if (dx && !isBlockedByWall(nx, player.y, room, canvas)) player.x = nx;
-  if (dy && !isBlockedByWall(player.x, ny, room, canvas)) player.y = ny;
-  checkDoorCrossing(room, canvas);
+  if (dx && !isBlockedByWall(nx, player.y, room, roomView)) player.x = nx;
+  if (dy && !isBlockedByWall(player.x, ny, room, roomView)) player.y = ny;
+  checkDoorCrossing(room, roomView);
 }
 
 function updatePlayerAnimation(moving, dx) {
@@ -547,10 +612,8 @@ function checkGuardianContact() {
   let room = dungeon.rooms.get(currentRoomId);
   if (!room.hasGuardian || room.cleared) return;
 
-  let center = { x: canvas.width / 2, y: canvas.height / 2 };
-  if (dist(player, center) < 40) { // guardian marker radius (24) + player reach
-    defeatGuardian(room);
-  }
+  let center = { x: roomView.width / 2, y: roomView.height / 2 };
+  if (dist(player, center) < 40) defeatGuardian(room);
 }
 
 function defeatGuardian(room) {
@@ -650,16 +713,12 @@ const ENEMY_SPEED = { chaser: 1.6, patroller: 1.1, stationary: 0 };
 const ARCHETYPES = ['chaser', 'stationary', 'patroller'];
 
 function spawnEnemy(color) {
-  let x = canvas.width / 2 + (Math.random() * 160 - 80);
-  let y = canvas.height / 2 + (Math.random() * 100 - 50);
+  let x = roomView.width / 2 + (Math.random() * 160 - 80);
+  let y = roomView.height / 2 + (Math.random() * 100 - 50);
   let type = ARCHETYPES[(Math.random() * ARCHETYPES.length) | 0];
-  return {
-    type, color, x, y, homeX: x, homeY: y,
-    dir: Math.random() < 0.5 ? 1 : -1,
-    speed: ENEMY_SPEED[type],
-    sprite: null, // built lazily once creatureBaseImg has finished loading
-    alive: true,
-  };
+  return { type, color, x, y, homeX: x, homeY: y,
+    dir: Math.random() < 0.5 ? 1 : -1, speed: ENEMY_SPEED[type],
+    sprite: null, alive: true };
 }
 
 function updateEnemy(e, room) {
@@ -669,11 +728,11 @@ function updateEnemy(e, room) {
     let len = Math.hypot(dx, dy) || 1;
     let nx = e.x + (dx / len) * e.speed;
     let ny = e.y + (dy / len) * e.speed;
-    if (!isBlockedByWall(nx, e.y, room, canvas)) e.x = nx;
-    if (!isBlockedByWall(e.x, ny, room, canvas)) e.y = ny;
+    if (!isBlockedByWall(nx, e.y, room, roomView)) e.x = nx;
+    if (!isBlockedByWall(e.x, ny, room, roomView)) e.y = ny;
   } else if (e.type === 'patroller') {
     let nx = e.x + e.speed * e.dir;
-    if (isBlockedByWall(nx, e.y, room, canvas) || Math.abs(nx - e.homeX) > 70) {
+    if (isBlockedByWall(nx, e.y, room, roomView) || Math.abs(nx - e.homeX) > 70) {
       e.dir *= -1;
     } else {
       e.x = nx;
@@ -780,6 +839,15 @@ const { canvas } = init();
 initPointer();
 initKeys();
 
+// ---- HUD layout -----------------------------------------------------------
+// Gameplay (walls, doors, player, enemies) is entirely unaware of the
+// banner: it operates in room-local coords sized ROOM_W x ROOM_H. The room
+// is placed visually below the banner purely by translating the context in
+// the game_state===2 render case — see below.
+const ROOM_W = canvas.width;
+const ROOM_H = canvas.height - BANNER_H;
+const roomView = { width: ROOM_W, height: ROOM_H };
+
 // ------------ LOAD SPRITESHEETS ------------
 
 const IMG_PATH = 'assets/img/';   // ← adjust if your art lives elsewhere
@@ -830,6 +898,8 @@ let player_score = 0;
 let player_name = '';
 let is_name_entered = false;
 let current_level = 1;
+const MAX_HEALTH = 3;
+let player_health = MAX_HEALTH;
 
 // ------------ functions toolbox ------------
 function dist(a,b){ let dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
@@ -1077,28 +1147,28 @@ function tileToXY(col, row, tileEngine) {
   };
 }
 
-function initGame(reason,level) {
-  if (reason == 'restart'){
+function initGame(reason, level) {
+  if (reason == 'restart') {
     chrono.reset();
-    // -- reinit variable used for game score
     player_score = 0;
     player_name = '';
     is_name_entered = false;
     collected_colors = [];
-  } else if (reason == 'nextlevel'){
+    player_health = MAX_HEALTH;
+  } else if (reason == 'nextlevel') {
     game_level = level;
     dungeon = generateDungeon(level);
     currentRoomId = dungeon.startId;
-    player.x = canvas.width / 2;
-    player.y = canvas.height / 2;
-  };
+    player.x = roomView.width / 2;
+    player.y = roomView.height / 2;
+  }
 
   chrono.start();
   game_level = level;
   dungeon = generateDungeon(level);
   currentRoomId = dungeon.startId;
-  player.x = canvas.width / 2;
-  player.y = canvas.height / 2;
+  player.x = roomView.width / 2;
+  player.y = roomView.height / 2;
 }
 
 // Initialization of the game
@@ -1149,13 +1219,17 @@ let loop = GameLoop({  // create the main game loop
         game_title.render();
         start_menu.render();
         break;
-      case 2:
-        //tileEngine.render();
-        renderRoom(dungeon.rooms.get(currentRoomId), dungeon, canvas);
+      case 2: {
+        let ctx = kontra.getContext();
+        ctx.save();
+        ctx.translate(0, BANNER_H);
+        renderRoom(dungeon.rooms.get(currentRoomId), dungeon, roomView);
         renderPlayer();
         renderEnemies();
-        renderMinimap(dungeon, currentRoomId);
+        ctx.restore();
+        renderBanner();
         break;
+      }
       case 3:
         game_over.render();
         start_again.render();
