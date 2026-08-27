@@ -97,10 +97,99 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 // pattern flicker instead of reading as a fixed floor. The draw functions
 // below are deterministic given (fx, fy, fw, fh, room.color) — the only
 // randomness in the whole feature is "which of these functions runs".
-const TEXTURES = ['plain', 'dots', 'brick', 'grid', 'diagonal'];
+const TEXTURES = ['plain', 'dots', 'brick', 'grid', 'diagonal', 'stone'];
 
 function pickTexture() {
   return TEXTURES[(Math.random() * TEXTURES.length) | 0];
+}
+
+// ---- Stone floor (irregular flagstones, grouped into square modules) ------
+// First pass used coursed rows of similar-height slabs — that's a masonry
+// *wall* technique (stretcher bond), which is why it read wrong for a
+// floor. This instead mimics tabletop-dungeon-tile flooring: the floor is
+// divided into square macro cells (like individual physical tile pieces),
+// and each cell is recursively split (BSP-style) into stone chunks of very
+// different sizes — "crazy paving" rather than aligned rows.
+//
+// Like the coursed version, this needs real per-room randomness (which cuts
+// happen where), so it's built ONCE per room and cached as room.stoneTiles.
+// drawStoneTexture() only ever reads that cached list — never calls
+// Math.random() itself — so the floor stays static frame to frame instead
+// of re-cracking every tick.
+const STONE_CELL = 90;          // target macro cell size (~one "tile square")
+const STONE_MIN = 10;           // smallest stone chunk allowed
+const STONE_MAX_DEPTH = 4;      // subdivision depth cap, bounds stone count
+const STONE_STOP_CHANCE = 0.28; // chance to stop subdividing early, for size variety
+const STONE_MORTAR = 2;         // gap between stones, reads as grout
+
+function subdivideStone(x, y, w, h, depth, out) {
+  let tooSmall = w < STONE_MIN * 2 && h < STONE_MIN * 2;
+  if (depth >= STONE_MAX_DEPTH || tooSmall || Math.random() < STONE_STOP_CHANCE) {
+    out.push({ x, y, w, h, shade: (Math.random() * 16) - 8 });
+    return;
+  }
+
+  // Usually split along the longer axis (keeps chunks from going sliver-thin),
+  // but flip sometimes so it doesn't read as a predictable grid.
+  let splitVertical = w >= h;
+  if (Math.random() < 0.25) splitVertical = !splitVertical;
+
+  if (splitVertical) {
+    let lo = STONE_MIN, hi = w - STONE_MIN;
+    if (hi <= lo) { out.push({ x, y, w, h, shade: (Math.random() * 16) - 8 }); return; }
+    let cut = lo + Math.random() * (hi - lo);
+    subdivideStone(x, y, cut, h, depth + 1, out);
+    subdivideStone(x + cut, y, w - cut, h, depth + 1, out);
+  } else {
+    let lo = STONE_MIN, hi = h - STONE_MIN;
+    if (hi <= lo) { out.push({ x, y, w, h, shade: (Math.random() * 16) - 8 }); return; }
+    let cut = lo + Math.random() * (hi - lo);
+    subdivideStone(x, y, w, cut, depth + 1, out);
+    subdivideStone(x, y + cut, w, h - cut, depth + 1, out);
+  }
+}
+
+function buildStoneTiles(fw, fh) {
+  let tiles = [];
+  let cols = Math.max(1, Math.round(fw / STONE_CELL));
+  let rows = Math.max(1, Math.round(fh / STONE_CELL));
+  let cellW = fw / cols, cellH = fh / rows;
+
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      subdivideStone(cx * cellW, cy * cellH, cellW, cellH, 0, tiles);
+    }
+  }
+  return tiles;
+}
+
+// Draws the cached chunk list, offset into the floor rect, with a light
+// top/left edge and dark bottom/right edge on each chunk to fake a bevel —
+// cheap 3D read without any image assets.
+function drawStoneTexture(ctx, room, fx, fy) {
+  (room.stoneTiles || []).forEach(t => {
+    let bx = fx + t.x, by = fy + t.y;
+    let bw = t.w - STONE_MORTAR, bh = t.h - STONE_MORTAR;
+    if (bw <= 0 || bh <= 0) return;
+
+    ctx.fillStyle = shadeColor(room.color, t.shade - 6);
+    ctx.fillRect(bx, by, bw, bh);
+
+    ctx.strokeStyle = shadeColor(room.color, t.shade + 20);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bx, by + bh);
+    ctx.lineTo(bx, by);
+    ctx.lineTo(bx + bw, by);
+    ctx.stroke();
+
+    ctx.strokeStyle = shadeColor(room.color, t.shade - 28);
+    ctx.beginPath();
+    ctx.moveTo(bx + bw, by);
+    ctx.lineTo(bx + bw, by + bh);
+    ctx.lineTo(bx, by + bh);
+    ctx.stroke();
+  });
 }
 
 // Lighten ('amt' > 0) or darken ('amt' < 0) a '#rrggbb' color. Rooms that
@@ -189,6 +278,10 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
         ctx.stroke();
       }
       break;
+
+    case 'stone':
+      drawStoneTexture(ctx, room, fx, fy);
+      break;
   }
 
   ctx.restore();
@@ -202,6 +295,9 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
     r.hasGuardian = false;
     r.enemies = [];
     r.texture = pickTexture();
+    if (r.texture === 'stone') {
+      r.stoneTiles = buildStoneTiles(canvas.width - 2 * WALL, canvas.height - 2 * WALL);
+    }
   });
 
   let start = occupied.get(START_ID);
