@@ -312,12 +312,13 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
   boss.color = levelColor;
 
   // Palette-swapped enemy archetypes: every normal room has a coin-flip
-  // chance of one enemy, tinted to this level's rainbow color. Doesn't touch
-  // room.cleared — these are roaming hazards in already-open rooms, not a
-  // new lock/clear gate.
+  // chance of one enemy, tinted to this level's rainbow color. A room that
+  // gets one starts locked (cleared = false) — doors render red and stay
+  // solid — until every enemy in it is defeated (see checkRoomClear).
   rooms.forEach(r => {
     if (r.type === 'normal' && Math.random() < 0.5) {
       r.enemies.push(spawnEnemy(levelColor));
+      r.cleared = false;
     }
   });
 
@@ -363,6 +364,20 @@ const DOOR_W = 70;
 const PLAYER_SIZE = 14;   // half-width/half-height, used for wall & door collision
 const PLAYER_SPEED = 3;   // pixels per fixed update tick (60/s)
 const BANNER_H = 90; // top HUD banner — 1/4 of the 360px canvas height
+
+// ---- Hit feedback (knockback + i-frames) -----------------------------------
+const PLAYER_INVINCIBLE_FRAMES = 45; // ~0.75s of i-frames at 60 ticks/s
+const KNOCKBACK_DIST = 18;           // px pushed away from the thing that hit us
+
+// ---- Dash attack ------------------------------------------------------------
+// The player's only offensive move: a short burst in the last-moved
+// direction. While dashing, enemy contact kills the enemy instead of hurting
+// the player (see checkEnemyContact) — plain walking contact only hurts now,
+// it no longer kills. This is what makes room-clearing actually require the
+// player to do something, rather than just bumping into things.
+const DASH_SPEED = 7;              // px/tick while dashing, vs PLAYER_SPEED=3 normal
+const DASH_FRAMES = 10;            // ~0.17s dash duration
+const DASH_COOLDOWN_FRAMES = 30;   // ~0.5s before another dash is allowed
 
 function renderRoom(room, dungeon, canvas) {
   let ctx = kontra.getContext();
@@ -424,6 +439,10 @@ function renderMinimap(dungeon, currentRoomId, x0 = 12, y0 = 12, cell = 10) {
 // Placeholder circle until a real sprite exists — the point is to make
 // free movement inside a room visible/testable.
 function renderPlayer() {
+  // Flicker while invincible (skip ~half the frames) so a hit reads as
+  // "recovering" rather than the player silently ignoring more damage.
+  if (player.invincibleFrames > 0 && (player.invincibleFrames % 6) < 3) return;
+
   let ctx = kontra.getContext();
   if (!playerSprite) {
     ctx.fillStyle = '#fff';
@@ -559,22 +578,65 @@ function checkDoorCrossing(room, canvas) {
 }
 
 // Continuous, free movement inside the current room. Called every fixed
-// update tick while game_state == 2 (play).
+// update tick while game_state == 2 (play). Dashing (see triggerDash) takes
+// over movement entirely for its duration — normal arrow-key input is
+// ignored until the dash finishes.
 function updatePlayer() {
+  if (player.invincibleFrames > 0) player.invincibleFrames--;
+  if (player.dashCooldownFrames > 0) player.dashCooldownFrames--;
+
+  let room = dungeon.rooms.get(currentRoomId);
+
+  if (player.dashFrames > 0) {
+    player.dashFrames--;
+    if (player.dashFrames === 0) player.dashCooldownFrames = DASH_COOLDOWN_FRAMES;
+    if (player.dashDirX) playerFacingLeft = player.dashDirX < 0;
+    updatePlayerAnimation(true, player.dashDirX); // keep the walk animation playing & facing correct mid-dash
+    let nx = player.x + player.dashDirX * DASH_SPEED;
+    let ny = player.y + player.dashDirY * DASH_SPEED;
+    if (!isBlockedByWall(nx, player.y, room, roomView)) player.x = nx;
+    if (!isBlockedByWall(player.x, ny, room, roomView)) player.y = ny;
+    checkDoorCrossing(room, roomView);
+    return;
+  }
+
   let dx = keyPressed('arrowright') - keyPressed('arrowleft');
   let dy = keyPressed('arrowdown') - keyPressed('arrowup');
   let moving = dx || dy;
 
   updatePlayerAnimation(moving, dx);
+  if (moving) { player.lastDx = dx; player.lastDy = dy; } // remembered for a directionless dash press
   if (!moving) return;
 
   if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
-  let room = dungeon.rooms.get(currentRoomId);
   let nx = player.x + dx * PLAYER_SPEED;
   let ny = player.y + dy * PLAYER_SPEED;
   if (dx && !isBlockedByWall(nx, player.y, room, roomView)) player.x = nx;
   if (dy && !isBlockedByWall(player.x, ny, room, roomView)) player.y = ny;
   checkDoorCrossing(room, roomView);
+}
+
+// Starts a dash in whichever direction is currently held, falling back to
+// the last direction the player moved in if no arrow key is held at the
+// moment of the press (so "tap dash while standing still" still does
+// something sensible). Blocked by an active dash or its cooldown.
+function triggerDash() {
+  if (game_state !== 2) return;
+  if (player.dashFrames > 0 || player.dashCooldownFrames > 0) return;
+
+  let dx = keyPressed('arrowright') - keyPressed('arrowleft');
+  let dy = keyPressed('arrowdown') - keyPressed('arrowup');
+  if (!dx && !dy) { dx = player.lastDx; dy = player.lastDy; }
+  if (!dx && !dy) return; // no direction available yet, nothing to dash toward
+
+  let len = Math.hypot(dx, dy) || 1;
+  player.dashDirX = dx / len;
+  player.dashDirY = dy / len;
+  player.dashFrames = DASH_FRAMES;
+  // Dashing is also a brief i-frame window, so dashing into the thing that
+  // would've hit you doesn't cost a heart on the way through.
+  player.invincibleFrames = Math.max(player.invincibleFrames, DASH_FRAMES + 6);
+  playSound('dash');
 }
 
 function updatePlayerAnimation(moving, dx) {
@@ -758,17 +820,61 @@ function renderEnemy(e) {
   ctx.fill();
 }
 
-// Contact resolution is a placeholder — wire this into whatever
-// ability/damage system you land on. For now, touching an enemy just
-// removes it, matching the "contact/ability-based, no aimed shooting" design.
+// The player's actual offensive move is the dash (triggerDash). Plain
+// walking contact just hurts the player now — the enemy survives and keeps
+// coming, so standing still or wandering into things is no longer a free
+// kill. Dashing through an enemy is what removes it (and can't hurt the
+// player back, since triggerDash grants i-frames for the dash's duration).
 function checkEnemyContact(room) {
   if (!room.enemies) return;
   room.enemies.forEach(e => {
-    if (e.alive && dist(player, e) < ENEMY_SIZE / 2 + PLAYER_SIZE) {
+    if (!e.alive || dist(player, e) >= ENEMY_SIZE / 2 + PLAYER_SIZE) return;
+
+    if (player.dashFrames > 0) {
       e.alive = false;
       playSound('squash');
+      player_score += 10; // small reward for a clean dash kill
+    } else if (player.invincibleFrames <= 0) {
+      hurtPlayer(e);
     }
   });
+}
+
+// Damages the player, applies knockback away from whatever hit them, and
+// starts the invincibility window. Triggers game over at 0 health — reusing
+// the existing game_state 3 flow.
+function hurtPlayer(source) {
+  player_health--;
+  player.invincibleFrames = PLAYER_INVINCIBLE_FRAMES;
+  applyKnockback(source);
+  playSound('rebound');
+  if (player_health <= 0) {
+    game_state = 3;
+    chrono.stop();
+  }
+}
+
+function applyKnockback(source) {
+  let dx = player.x - source.x, dy = player.y - source.y;
+  let len = Math.hypot(dx, dy) || 1;
+  let room = dungeon.rooms.get(currentRoomId);
+  let nx = player.x + (dx / len) * KNOCKBACK_DIST;
+  let ny = player.y + (dy / len) * KNOCKBACK_DIST;
+  if (!isBlockedByWall(nx, player.y, room, roomView)) player.x = nx;
+  if (!isBlockedByWall(player.x, ny, room, roomView)) player.y = ny;
+}
+
+// A normal room with enemies starts locked (finalizeDungeon sets
+// cleared = false when it seeds enemies). Once every enemy in the room is
+// dead, open its doors — boss rooms are untouched here, they clear through
+// checkGuardianContact/defeatGuardian instead.
+function checkRoomClear(room) {
+  if (room.cleared || room.type === 'boss') return;
+  if (!room.enemies || !room.enemies.length) return;
+  if (room.enemies.every(e => !e.alive)) {
+    room.cleared = true;
+    playSound('pickup');
+  }
 }
 
 function updateEnemies() {
@@ -776,6 +882,7 @@ function updateEnemies() {
   if (!room.enemies) return;
   room.enemies.forEach(e => updateEnemy(e, room));
   checkEnemyContact(room);
+  checkRoomClear(room);
 }
 
 function renderEnemies() {
@@ -890,7 +997,12 @@ const text_options = {
 //let tileEngine = [];
 let dungeon;
 let currentRoomId;
-let player = { x: 0, y: 0 };
+let player = {
+  x: 0, y: 0,
+  invincibleFrames: 0,
+  dashFrames: 0, dashCooldownFrames: 0, dashDirX: 0, dashDirY: 0,
+  lastDx: 1, lastDy: 0 // default facing right, so an immediate dash press has somewhere to go
+};
 let MAX_HIGH_SCORES = 5;
 let game_level = 1;
 let game_state = 1; // 'menu' = 1, 'play' = 2, 'gameover' = 3, 'gamewon' = 4, 'highscores' = 5
@@ -961,6 +1073,7 @@ function handleLetterKey(letter) {
 'abcdefghijklmnopqrstuvwxyz'.split('').forEach(letter => onKey(letter, handleLetterKey(letter)));
 
 onKey('esc', () => { if (game_state === 6) player_name = ''; }); // clear a mistyped name
+onKey('space', triggerDash);
 onKey('enter', () => {
   if (game_state === 6 && player_name.length > 0) {
     save_highscore(player_score, player_name.toUpperCase());
@@ -1169,6 +1282,9 @@ function initGame(reason, level) {
   currentRoomId = dungeon.startId;
   player.x = roomView.width / 2;
   player.y = roomView.height / 2;
+  player.invincibleFrames = 0;
+  player.dashFrames = 0;
+  player.dashCooldownFrames = 0;
 }
 
 // Initialization of the game
