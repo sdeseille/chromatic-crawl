@@ -97,7 +97,7 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 // pattern flicker instead of reading as a fixed floor. The draw functions
 // below are deterministic given (fx, fy, fw, fh, room.color) — the only
 // randomness in the whole feature is "which of these functions runs".
-const TEXTURES = ['plain', 'dots', 'brick', 'grid', 'diagonal', 'stone'];
+const TEXTURES = ['plain', 'dots', 'brick', 'grid', 'diagonal', 'stone', 'flagstone'];
 
 function pickTexture() {
   return TEXTURES[(Math.random() * TEXTURES.length) | 0];
@@ -192,6 +192,46 @@ function drawStoneTexture(ctx, room, fx, fy) {
   });
 }
 
+// ---- Flagstone floor (jittered square tiles, baked once per room) --------
+// Same reasoning as the stone texture above: the jitter offset and shade
+// per tile need real per-room randomness, so it's computed ONCE in
+// finalizeDungeon and cached as room.flagstoneTiles. drawFlagstoneTexture()
+// only ever reads that cache — never calls Math.random() itself — so the
+// floor doesn't re-jitter every render tick.
+const FLAGSTONE_TILE = 26;
+const FLAGSTONE_JITTER = 3;
+
+function buildFlagstoneTiles(fw, fh) {
+  let tiles = [];
+  for (let ty = -4; ty < fh; ty += FLAGSTONE_TILE) {
+    for (let tx = -4; tx < fw; tx += FLAGSTONE_TILE) {
+      let ox = tx + (Math.random() * FLAGSTONE_JITTER - FLAGSTONE_JITTER / 2);
+      let oy = ty + (Math.random() * FLAGSTONE_JITTER - FLAGSTONE_JITTER / 2);
+      let shade = (Math.random() * 16 - 8) | 0;
+      tiles.push({ x: ox, y: oy, shade });
+    }
+  }
+  return tiles;
+}
+
+// Draws the cached tile list, offset into the floor rect. Tinted against
+// room.color via shadeColor (like every other texture here) instead of a
+// hardcoded grey, so flagstone still reads as this level's rainbow color
+// rather than always looking stone-grey regardless of biome.
+function drawFlagstoneTexture(ctx, room, fx, fy) {
+  (room.flagstoneTiles || []).forEach(t => {
+    let bx = fx + t.x, by = fy + t.y;
+    let size = FLAGSTONE_TILE - 3;
+
+    ctx.fillStyle = shadeColor(room.color, t.shade);
+    ctx.fillRect(bx, by, size, size);
+
+    ctx.strokeStyle = 'rgba(0,0,0,.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, size, size);
+  });
+}
+
 // Lighten ('amt' > 0) or darken ('amt' < 0) a '#rrggbb' color. Rooms that
 // haven't been given an explicit color yet fall back to the same neutral
 // grey renderRoom() already uses for the floor fill.
@@ -282,6 +322,10 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
     case 'stone':
       drawStoneTexture(ctx, room, fx, fy);
       break;
+
+    case 'flagstone':
+      drawFlagstoneTexture(ctx, room, fx, fy);
+      break;
   }
 
   ctx.restore();
@@ -297,6 +341,8 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
     r.texture = pickTexture();
     if (r.texture === 'stone') {
       r.stoneTiles = buildStoneTiles(roomView.width - 2 * WALL, roomView.height - 2 * WALL);
+    } else if (r.texture === 'flagstone') {
+      r.flagstoneTiles = buildFlagstoneTiles(roomView.width - 2 * WALL, roomView.height - 2 * WALL);
     }
   });
 
