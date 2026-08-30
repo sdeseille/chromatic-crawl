@@ -356,6 +356,7 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
   boss.hasGuardian = true;
   boss.cleared = false;
   boss.color = levelColor;
+  boss.boss = makeBoss(); // idle/telegraph/charge/recover state — see BOSS GUARDIAN section
 
   // Palette-swapped enemy archetypes: every normal room has a coin-flip
   // chance of one enemy, tinted to this level's rainbow color. A room that
@@ -374,6 +375,7 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
 // ---- Public entry point, with retry-on-failure ------------------------------
 function generateDungeon(level, targetRooms = 13, maxAttempts = 60) {
   let levelColor = colorForLevel(level);
+  refreshGuardianSprite(levelColor); // was hardcoded violet for every level — now matches this level's color
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let { occupied, endRooms } = generateFloorplan(targetRooms);
 
@@ -443,16 +445,7 @@ function renderRoom(room, dungeon, canvas) {
   });
 
   if (room.hasGuardian && !room.cleared) {
-    if (guardianSprite) {
-      guardianSprite.x = w / 2;
-      guardianSprite.y = h / 2;
-      guardianSprite.render();
-    } else {
-      ctx.fillStyle = '#000';
-      ctx.beginPath();
-      ctx.arc(w / 2, h / 2, 24, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    renderBoss(room);
   }
 }
 
@@ -715,6 +708,12 @@ function placePlayerAtDoor(player, dirEntered, canvas) {
 
 let collected_colors = [];
 
+// NOTE: checkGuardianContact() and updateGuardianAnimation() (this function
+// and the one further below) are no longer called — replaced by
+// updateBoss()/checkBossContact() in the BOSS GUARDIAN section (near the
+// creature-sheet load code), which run a full idle/telegraph/charge/recover
+// fight instead of a single "get within 40px" proximity check. Left in
+// place rather than deleted, same as tryMoveThroughDoor() above.
 function checkGuardianContact() {
   if (game_state !== 2) return;
   let room = dungeon.rooms.get(currentRoomId);
@@ -739,6 +738,7 @@ function defeatGuardian(room) {
 function collectColor(color) {
   collected_colors.push(color);
   player_score += 100 + computeTimeBonus(chrono.getElapsed());
+  player_health = MAX_HEALTH; // reward for the boss fight: capped full heal, never raises the ceiling
   playSound('pickup');
   advanceOrWin();
 }
@@ -1028,8 +1028,177 @@ loadImage(IMG_PATH + 'piskel-unicorn.png').then(img => {
 
 loadImage(IMG_PATH + 'creature-sheet.png').then(img => {
   creatureBaseImg = img;
-  guardianSprite = makeCreatureSprite('violet', GUARDIAN_SPRITE_SIZE);
+  // Was hardcoded 'violet' regardless of level — every boss looked the
+  // same color no matter what you were fighting for. Tint to whatever
+  // level is actually loaded; generateDungeon()'s refreshGuardianSprite()
+  // call keeps this correct on every subsequent level transition too.
+  guardianSprite = makeCreatureSprite(colorForLevel(current_level), GUARDIAN_SPRITE_SIZE);
 });
+
+// ============================================================================
+// BOSS GUARDIAN — "Guardian Duel"
+// Each level's dead-end boss room now runs a small idle → telegraph →
+// charge → recover cycle instead of dying on simple proximity (see the old
+// checkGuardianContact()/updateGuardianAnimation(), kept above but unused).
+// Reuses primitives that already exist elsewhere in this file: chaser-style
+// movement for the charge, the player's i-frame flicker technique for the
+// telegraph warning, and the existing knockback/hurtPlayer pipeline for
+// boss-on-player contact — no new systems, just new timers and a state
+// field on the boss object.
+// ============================================================================
+
+const BOSS_HP = 3;                  // mirrors MAX_HEALTH — a fair 1v1 duel, not a bullet-sponge
+const BOSS_IDLE_FRAMES = 60;        // ~1s holding center before the next telegraph
+const BOSS_TELEGRAPH_FRAMES = 24;   // ~0.4s warning flash before the charge
+const BOSS_CHARGE_FRAMES = 40;      // duration of the lunge
+const BOSS_RECOVER_FRAMES = 30;     // ~0.5s stationary & openly vulnerable after a charge
+const BOSS_CHARGE_SPEED = 3.2;      // faster than the fastest normal enemy (chaser = 1.6)
+const BOSS_INVINCIBLE_FRAMES = 20;  // i-frames after taking a dash hit, so one dash can't multi-tick
+const BOSS_KNOCKBACK_DIST = 14;
+const BOSS_HIT_RADIUS = GUARDIAN_SPRITE_SIZE / 2 + PLAYER_SIZE;
+
+function makeBoss() {
+  return {
+    hp: BOSS_HP,
+    state: 'idle',
+    timer: BOSS_IDLE_FRAMES,
+    x: roomView.width / 2,
+    y: roomView.height / 2,
+    chargeDirX: 0,
+    chargeDirY: 0,
+    invincibleFrames: 0,
+  };
+}
+
+// Swaps the shared guardian sprite to a given level's rainbow color. Called
+// from generateDungeon() once a level's palette is known. If creature-sheet
+// .png hasn't finished loading yet this is a no-op — renderBoss()'s fallback
+// circle covers the gap until the initial load callback above fires.
+function refreshGuardianSprite(levelColor) {
+  if (!creatureBaseImg) return;
+  guardianSprite = makeCreatureSprite(levelColor, GUARDIAN_SPRITE_SIZE);
+}
+
+function updateBoss(room) {
+  if (!room.hasGuardian || room.cleared) return;
+  let boss = room.boss;
+  if (!boss) return;
+
+  if (boss.invincibleFrames > 0) boss.invincibleFrames--;
+
+  switch (boss.state) {
+    case 'idle':
+      if (--boss.timer <= 0) { boss.state = 'telegraph'; boss.timer = BOSS_TELEGRAPH_FRAMES; }
+      break;
+
+    case 'telegraph':
+      if (--boss.timer <= 0) {
+        let dx = player.x - boss.x, dy = player.y - boss.y;
+        let len = Math.hypot(dx, dy) || 1;
+        boss.chargeDirX = dx / len;
+        boss.chargeDirY = dy / len;
+        boss.state = 'charge';
+        boss.timer = BOSS_CHARGE_FRAMES;
+      }
+      break;
+
+    case 'charge': {
+      let nx = boss.x + boss.chargeDirX * BOSS_CHARGE_SPEED;
+      let ny = boss.y + boss.chargeDirY * BOSS_CHARGE_SPEED;
+      if (!isBlockedByWall(nx, boss.y, room, roomView)) boss.x = nx;
+      if (!isBlockedByWall(boss.x, ny, room, roomView)) boss.y = ny;
+      if (--boss.timer <= 0) { boss.state = 'recover'; boss.timer = BOSS_RECOVER_FRAMES; }
+      break;
+    }
+
+    case 'recover':
+      if (--boss.timer <= 0) { boss.state = 'idle'; boss.timer = BOSS_IDLE_FRAMES; }
+      break;
+  }
+
+  guardianSprite?.currentAnimation?.update();
+}
+
+// Boss-on-player and player-on-boss contact in one pass: a dash hit damages
+// the boss (own i-frames + knockback, mirroring checkEnemyContact), while
+// plain contact during a charge hurts the player exactly like a normal
+// enemy would (reuses hurtPlayer). Standing next to an idling or recovering
+// boss is safe — only the charge itself threatens the player, and the
+// recovery window right after is the intended punish opportunity.
+function checkBossContact(room) {
+  if (!room.hasGuardian || room.cleared) return;
+  let boss = room.boss;
+  if (!boss || dist(player, boss) >= BOSS_HIT_RADIUS) return;
+
+  if (player.dashFrames > 0) {
+    if (boss.invincibleFrames <= 0) {
+      boss.hp--;
+      boss.invincibleFrames = BOSS_INVINCIBLE_FRAMES;
+      playSound('squash');
+      applyBossKnockback(boss);
+      if (boss.hp <= 0) defeatGuardian(room);
+    }
+  } else if (boss.state === 'charge' && player.invincibleFrames <= 0) {
+    hurtPlayer(boss);
+  }
+}
+
+function applyBossKnockback(boss) {
+  let dx = boss.x - player.x, dy = boss.y - player.y;
+  let len = Math.hypot(dx, dy) || 1;
+  let room = dungeon.rooms.get(currentRoomId);
+  let nx = boss.x + (dx / len) * BOSS_KNOCKBACK_DIST;
+  let ny = boss.y + (dy / len) * BOSS_KNOCKBACK_DIST;
+  if (!isBlockedByWall(nx, boss.y, room, roomView)) boss.x = nx;
+  if (!isBlockedByWall(boss.x, ny, room, roomView)) boss.y = ny;
+}
+
+// Draws the boss at its live (possibly mid-charge) position instead of a
+// fixed room-center point, plus three cheap feedback reads: a flicker
+// during the telegraph (same skip-frames trick as player i-frames, reused
+// here as a warning rather than a hit-reaction), a ring around the boss
+// while it's in its vulnerable recovery window, and small HP pips so a hit
+// actually reads as progress toward defeating it.
+function renderBoss(room) {
+  let ctx = kontra.getContext();
+  let boss = room.boss;
+  let bx = boss ? boss.x : roomView.width / 2;
+  let by = boss ? boss.y : roomView.height / 2;
+
+  let flashHidden = boss && boss.state === 'telegraph' && (boss.timer % 6) < 3;
+  if (!flashHidden) {
+    if (guardianSprite) {
+      guardianSprite.x = bx;
+      guardianSprite.y = by;
+      guardianSprite.render();
+    } else {
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.arc(bx, by, 24, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  if (!boss) return;
+
+  if (boss.state === 'recover') {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(bx, by, GUARDIAN_SPRITE_SIZE / 2 + 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  ctx.save();
+  for (let i = 0; i < BOSS_HP; i++) {
+    ctx.globalAlpha = i < boss.hp ? 1 : 0.25;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(bx - 18 + i * 18, by - GUARDIAN_SPRITE_SIZE / 2 - 14, i < boss.hp ? 5 : 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
 
 // ------------ CONSTANT ------------
 const bold_font = 'bold 20px Arial, sans-serif';
@@ -1344,12 +1513,14 @@ let loop = GameLoop({  // create the main game loop
     switch (game_state) {
       case 1:
         break;
-      case 2:
+      case 2: {
         updatePlayer();
-        checkGuardianContact();
-        updateGuardianAnimation();
+        let room = dungeon.rooms.get(currentRoomId);
+        updateBoss(room);
+        checkBossContact(room);
         updateEnemies();
         break;
+      }
       case 3:
         game_over.update();
         // Check if player made a high score
