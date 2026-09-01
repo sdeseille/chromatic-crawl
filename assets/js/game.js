@@ -567,18 +567,6 @@ function formatTime(seconds) {
 // the entire "camera" system, since the canvas never actually pans.
 // ============================================================================
 
-function tryMoveThroughDoor(dungeon, currentRoomId, dir) {
-  let room = dungeon.rooms.get(currentRoomId);
-  if (!room.cleared) return currentRoomId; // locked
-  let nextId = room.doors[dir];
-  if (nextId === undefined) return currentRoomId;
-  return nextId;
-}
-
-function opposite(dir) {
-  return { n: 's', s: 'n', e: 'w', w: 'e' }[dir];
-}
-
 // Would placing the player's center at (x, y) push it into a solid wall
 // segment? A door only counts as "open" (non-solid) when the room owns a
 // door in that direction AND that door is unlocked (room.cleared).
@@ -690,12 +678,6 @@ function updatePlayerAnimation(moving, dx) {
   playerSprite.update();
 }
 
-function updateGuardianAnimation() {
-  if (!guardianSprite) return;
-  let room = dungeon.rooms.get(currentRoomId);
-  if (room.hasGuardian && !room.cleared) guardianSprite.update();
-}
-
 function placePlayerAtDoor(player, dirEntered, canvas) {
   const OFFSET = WALL + 16;
   switch (dirEntered) {
@@ -707,21 +689,6 @@ function placePlayerAtDoor(player, dirEntered, canvas) {
 }
 
 let collected_colors = [];
-
-// NOTE: checkGuardianContact() and updateGuardianAnimation() (this function
-// and the one further below) are no longer called — replaced by
-// updateBoss()/checkBossContact() in the BOSS GUARDIAN section (near the
-// creature-sheet load code), which run a full idle/telegraph/charge/recover
-// fight instead of a single "get within 40px" proximity check. Left in
-// place rather than deleted, same as tryMoveThroughDoor() above.
-function checkGuardianContact() {
-  if (game_state !== 2) return;
-  let room = dungeon.rooms.get(currentRoomId);
-  if (!room.hasGuardian || room.cleared) return;
-
-  let center = { x: roomView.width / 2, y: roomView.height / 2 };
-  if (dist(player, center) < 40) defeatGuardian(room);
-}
 
 function defeatGuardian(room) {
   room.cleared = true;
@@ -913,7 +880,7 @@ function applyKnockback(source) {
 // A normal room with enemies starts locked (finalizeDungeon sets
 // cleared = false when it seeds enemies). Once every enemy in the room is
 // dead, open its doors — boss rooms are untouched here, they clear through
-// checkGuardianContact/defeatGuardian instead.
+// checkBossContact/defeatGuardian instead.
 function checkRoomClear(room) {
   if (room.cleared || room.type === 'boss') return;
   if (!room.enemies || !room.enemies.length) return;
@@ -938,7 +905,7 @@ function renderEnemies() {
 }
 
 
-let { init, TileEngine, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, clamp, collides, SpriteSheet, loadImage } = kontra;
+let { init, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, SpriteSheet, loadImage } = kontra;
 
 let // ZzFXMicro - Zuper Zmall Zound Zynth - v1.3.1 by Frank Force ~ 1000 bytes
 zzfxV=.3,               // volume
@@ -961,9 +928,6 @@ b.buffer=p;b.connect(zzfxX.destination);b.start()}
 // --- Litlle sound engine ---
 function playSound(type){
   switch(type){
-    case "jump": 
-      zzfx(...[.7,,177,.01,.02,.05,,.1,,35,,,,,,,,.81,.02,,146]);
-      break;
     case "rebound":
       zzfx(...[2.1,,358,.02,.01,.17,4,3.6,,,,,,.6,15,.4,.17,.75,.06]);
       break;
@@ -976,15 +940,6 @@ function playSound(type){
     case "pickup":
       zzfx(...[1.5,,539,,,.06,,.8,,,,,,.1,,,,.65]);
       break;
-    case "catStep1":
-      // a light, soft step
-      zzfx(...[,,120,.01,.02,.02,1,1.5,,.5]); 
-      break;
-    case "catStep2":
-      // a more subdued variant, slightly higher in pitch
-      zzfx(...[,,160,.01,.015,.02,1,1.2,,.6]); 
-      break;
-
   }
 }
 
@@ -1038,9 +993,8 @@ loadImage(IMG_PATH + 'creature-sheet.png').then(img => {
 // ============================================================================
 // BOSS GUARDIAN — "Guardian Duel"
 // Each level's dead-end boss room now runs a small idle → telegraph →
-// charge → recover cycle instead of dying on simple proximity (see the old
-// checkGuardianContact()/updateGuardianAnimation(), kept above but unused).
-// Reuses primitives that already exist elsewhere in this file: chaser-style
+// charge → recover cycle instead of dying on simple proximity. Reuses
+// primitives that already exist elsewhere in this file: chaser-style
 // movement for the charge, the player's i-frame flicker technique for the
 // telegraph warning, and the existing knockback/hurtPlayer pipeline for
 // boss-on-player contact — no new systems, just new timers and a state
@@ -1209,7 +1163,6 @@ const text_options = {
 };
 
 // ------------ Global ------------
-//let tileEngine = [];
 let dungeon;
 let currentRoomId;
 let player = {
@@ -1219,7 +1172,6 @@ let player = {
   lastDx: 1, lastDy: 0 // default facing right, so an immediate dash press has somewhere to go
 };
 let MAX_HIGH_SCORES = 5;
-let game_level = 1;
 let game_state = 1; // 'menu' = 1, 'play' = 2, 'gameover' = 3, 'gamewon' = 4, 'highscores' = 5
 let player_score = 0;
 let player_name = '';
@@ -1266,8 +1218,6 @@ function computeTimeBonus(seconds) {
   return Math.max(0, Math.round(1000 * (60 - t) / 60));
 }
 
-function is_last_level(level){ return level == NUMBER_OF_LEVELS;}
-
 // Shared handler for every a-z key. During name entry (game_state 6) each
 // letter appends to player_name (max 3 chars, matching the classic
 // arcade-initials convention already used by save_highscore's truncation).
@@ -1295,12 +1245,6 @@ onKey('enter', () => {
     game_state = 5; // show the updated highscore table
   }
 });
-
-// NOTE: tryMoveThroughDoor() and moveThroughDoor() (further up the file, in
-// the ROOM TRANSITIONS section) are no longer called anywhere — replaced by
-// checkDoorCrossing()/updatePlayer(). Left in place rather than deleted,
-// since you may still want tryMoveThroughDoor's "locked door" semantics
-// elsewhere (e.g. a minimap click-to-travel feature). Safe to remove if not.
 
 function get_highscores() {
   // Retrieve scores from localStorage or return an empty array if not present
@@ -1423,7 +1367,6 @@ let start = Text({
     // handle on down events on the sprite
     console.log("Clicked on Start");
     game_state = 2;
-    game_points_multiplier = 0;
   },
   onOver: function() {
     this.font = bold_font;
@@ -1465,16 +1408,6 @@ let start_menu = Grid({
 });
 track(start,highscore);
 
-// helper to convert col/row → centered pixel coordinates
-function tileToXY(col, row, tileEngine) {
-  let tw = tileEngine.tilewidth;
-  let th = tileEngine.tileheight;
-  return {
-    x: col * tw + tw/2,
-    y: row * th + th/2
-  };
-}
-
 function initGame(reason, level) {
   if (reason == 'restart') {
     chrono.reset();
@@ -1483,16 +1416,9 @@ function initGame(reason, level) {
     is_name_entered = false;
     collected_colors = [];
     player_health = MAX_HEALTH;
-  } else if (reason == 'nextlevel') {
-    game_level = level;
-    dungeon = generateDungeon(level);
-    currentRoomId = dungeon.startId;
-    player.x = roomView.width / 2;
-    player.y = roomView.height / 2;
   }
 
-  chrono.start();
-  game_level = level;
+  current_level = level;
   dungeon = generateDungeon(level);
   currentRoomId = dungeon.startId;
   player.x = roomView.width / 2;
@@ -1500,6 +1426,8 @@ function initGame(reason, level) {
   player.invincibleFrames = 0;
   player.dashFrames = 0;
   player.dashCooldownFrames = 0;
+
+  chrono.start();
 }
 
 // Initialization of the game
