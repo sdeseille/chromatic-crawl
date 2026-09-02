@@ -488,12 +488,24 @@ function renderPlayer() {
     ctx.beginPath();
     ctx.arc(player.x, player.y, PLAYER_SIZE, 0, Math.PI * 2);
     ctx.fill();
-    return;
+  } else {
+    playerSprite.x = player.x;
+    playerSprite.y = player.y;
+    playerSprite.scaleX = playerFacingLeft ? -1 : 1;
+    playerSprite.render();
   }
-  playerSprite.x = player.x;
-  playerSprite.y = player.y;
-  playerSprite.scaleX = playerFacingLeft ? -1 : 1;
-  playerSprite.render();
+
+  // Thorn Ward (Green blessing): a faint ring shows a banked shield charge
+  // is ready to absorb the next hit for free.
+  if (player.shieldCharges > 0) {
+    ctx.save();
+    ctx.strokeStyle = '#2ecc71';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, PLAYER_SIZE + 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 // ============================================================================
@@ -616,11 +628,12 @@ function updatePlayer() {
 
   if (player.dashFrames > 0) {
     player.dashFrames--;
-    if (player.dashFrames === 0) player.dashCooldownFrames = DASH_COOLDOWN_FRAMES;
+    if (player.dashFrames === 0) player.dashCooldownFrames = DASH_COOLDOWN_FRAMES * player.dashCooldownMult;
     if (player.dashDirX) playerFacingLeft = player.dashDirX < 0;
     updatePlayerAnimation(true, player.dashDirX); // keep the walk animation playing & facing correct mid-dash
-    let nx = player.x + player.dashDirX * DASH_SPEED;
-    let ny = player.y + player.dashDirY * DASH_SPEED;
+    let dashSpeed = DASH_SPEED * player.dashSpeedMult; // Orange blessing (Ember Dash) stretches this
+    let nx = player.x + player.dashDirX * dashSpeed;
+    let ny = player.y + player.dashDirY * dashSpeed;
     if (!isBlockedByWall(nx, player.y, room, roomView)) player.x = nx;
     if (!isBlockedByWall(player.x, ny, room, roomView)) player.y = ny;
     checkDoorCrossing(room, roomView);
@@ -705,9 +718,51 @@ function defeatGuardian(room) {
 function collectColor(color) {
   collected_colors.push(color);
   player_score += 100 + computeTimeBonus(chrono.getElapsed());
-  player_health = MAX_HEALTH; // reward for the boss fight: capped full heal, never raises the ceiling
+  applyColorBlessing(color); // story-tied reward — see COLOR BLESSINGS section
+  player_health = MAX_HEALTH; // full heal, against whatever the ceiling now is
   playSound('pickup');
   advanceOrWin();
+}
+
+// ============================================================================
+// COLOR BLESSINGS — story-tied boss rewards
+// Reclaiming a color doesn't just heal the player — it grants a small
+// permanent power themed to that color. This replaces a flat "+1 max HP per
+// boss", which would have quietly inflated health 3→10 across the run while
+// enemies stayed exactly as tough — a progressively *easier* late game,
+// backwards from what a dungeon crawler should feel like.
+//
+// Only Red touches max HP, and only once, so health can't run away on its
+// own. The other six colors buff dash reach, dash pace, hit recovery, or
+// survivability instead, so each guardian gives back something distinct —
+// "the world regains a color" reads as a new capability, not another point
+// added to the same bar.
+// ============================================================================
+function applyColorBlessing(color) {
+  switch (color) {
+    case 'red': // Vitality — the world's first reclaimed color is its lifeblood
+      MAX_HEALTH++;
+      break;
+    case 'orange': // Ember Dash — the dash burns further before it fades
+      player.dashSpeedMult += 0.25;
+      break;
+    case 'yellow': // Solar Haste — sunlight speeds up the dash's recovery
+      player.dashCooldownMult *= 0.75;
+      break;
+    case 'green': // Thorn Ward — nature's growth shields the next hit taken, free
+      player.shieldCharges++;
+      break;
+    case 'blue': // Tidal Grace — the calm after a hit lasts longer
+      player.iFrameBonus += 15;
+      break;
+    case 'indigo': // Arcane Echo — dash reach extends, easier to land a hit
+      player.dashReachBonus += 10;
+      break;
+    case 'violet': // Chromatic Overdrive — the rainbow is whole again
+      player.rainbowComplete = true;
+      player_score += 500; // capstone bonus for restoring the last color
+      break;
+  }
 }
 
 function advanceOrWin() {
@@ -841,7 +896,10 @@ function renderEnemy(e) {
 function checkEnemyContact(room) {
   if (!room.enemies) return;
   room.enemies.forEach(e => {
-    if (!e.alive || dist(player, e) >= ENEMY_SIZE / 2 + PLAYER_SIZE) return;
+    // Indigo blessing (Arcane Echo): a dashing player's effective reach is
+    // extended, so a well-timed but slightly short dash still connects.
+    let reach = PLAYER_SIZE + (player.dashFrames > 0 ? player.dashReachBonus : 0);
+    if (!e.alive || dist(player, e) >= ENEMY_SIZE / 2 + reach) return;
 
     if (player.dashFrames > 0) {
       e.alive = false;
@@ -857,8 +915,19 @@ function checkEnemyContact(room) {
 // starts the invincibility window. Triggers game over at 0 health — reusing
 // the existing game_state 3 flow.
 function hurtPlayer(source) {
+  // Green blessing (Thorn Ward): a banked shield charge absorbs this hit
+  // entirely, no heart lost — it still knocks back and grants i-frames so
+  // it reads as "a hit that didn't count" rather than a silent no-op.
+  if (player.shieldCharges > 0) {
+    player.shieldCharges--;
+    player.invincibleFrames = PLAYER_INVINCIBLE_FRAMES + player.iFrameBonus;
+    applyKnockback(source);
+    playSound('pickup');
+    return;
+  }
+
   player_health--;
-  player.invincibleFrames = PLAYER_INVINCIBLE_FRAMES;
+  player.invincibleFrames = PLAYER_INVINCIBLE_FRAMES + player.iFrameBonus; // Blue blessing extends this
   applyKnockback(source);
   playSound('rebound');
   if (player_health <= 0) {
@@ -1082,7 +1151,9 @@ function updateBoss(room) {
 function checkBossContact(room) {
   if (!room.hasGuardian || room.cleared) return;
   let boss = room.boss;
-  if (!boss || dist(player, boss) >= BOSS_HIT_RADIUS) return;
+  // Indigo blessing (Arcane Echo): same dash-reach bonus as regular enemies.
+  let reach = BOSS_HIT_RADIUS + (player.dashFrames > 0 ? player.dashReachBonus : 0);
+  if (!boss || dist(player, boss) >= reach) return;
 
   if (player.dashFrames > 0) {
     if (boss.invincibleFrames <= 0) {
@@ -1169,7 +1240,14 @@ let player = {
   x: 0, y: 0,
   invincibleFrames: 0,
   dashFrames: 0, dashCooldownFrames: 0, dashDirX: 0, dashDirY: 0,
-  lastDx: 1, lastDy: 0 // default facing right, so an immediate dash press has somewhere to go
+  lastDx: 1, lastDy: 0, // default facing right, so an immediate dash press has somewhere to go
+  // ---- Color Blessing state (see COLOR BLESSINGS section) ----
+  dashSpeedMult: 1,      // Orange: Ember Dash
+  dashCooldownMult: 1,   // Yellow: Solar Haste
+  iFrameBonus: 0,        // Blue: Tidal Grace
+  dashReachBonus: 0,     // Indigo: Arcane Echo
+  shieldCharges: 0,      // Green: Thorn Ward
+  rainbowComplete: false // Violet: Chromatic Overdrive
 };
 let MAX_HIGH_SCORES = 5;
 let game_state = 1; // 'menu' = 1, 'play' = 2, 'gameover' = 3, 'gamewon' = 4, 'highscores' = 5
@@ -1177,7 +1255,7 @@ let player_score = 0;
 let player_name = '';
 let is_name_entered = false;
 let current_level = 1;
-const MAX_HEALTH = 3;
+let MAX_HEALTH = 3; // was `const` — Red's blessing (Vitality) now raises this by one, once
 let player_health = MAX_HEALTH;
 
 // ------------ functions toolbox ------------
@@ -1338,6 +1416,12 @@ let game_over = Text({
   }
 });
 
+// Chromatic Overdrive (Violet's blessing) flourish: rather than sitting
+// static white on the win screen, the congratulations text cycles through
+// every color the player just spent the run reclaiming — a small, free
+// payoff for finishing the rainbow, reusing colors already defined in
+// RAINBOW rather than any new asset.
+let winFrame = 0;
 let game_won = Text({
   text: '🎉Congratulation🎉\n\nYour score: ' + player_score,
   font: 'italic 58px Arial',
@@ -1347,7 +1431,8 @@ let game_won = Text({
   anchor: {x: 0.5, y: 0.5},
   textAlign: 'center',
   update: function () {
-    this.text = '🎉Congratulation🎉\nYour score: ' + player_score
+    this.text = '🎉Congratulation🎉\nYour score: ' + player_score;
+    this.color = RAINBOW[((winFrame++ / 12) | 0) % RAINBOW.length];
   }
 });
 
@@ -1415,6 +1500,14 @@ function initGame(reason, level) {
     player_name = '';
     is_name_entered = false;
     collected_colors = [];
+    MAX_HEALTH = 3; // undo any Red (Vitality) blessing from the previous run
+    player.dashSpeedMult = 1;
+    player.dashCooldownMult = 1;
+    player.iFrameBonus = 0;
+    player.dashReachBonus = 0;
+    player.shieldCharges = 0;
+    player.rainbowComplete = false;
+    winFrame = 0;
     player_health = MAX_HEALTH;
   }
 
