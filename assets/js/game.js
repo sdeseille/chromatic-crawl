@@ -1315,9 +1315,18 @@ function handleLetterKey(letter) {
 }
 'abcdefghijklmnopqrstuvwxyz'.split('').forEach(letter => onKey(letter, handleLetterKey(letter)));
 
+let readyForNameEntry = false; // true once a win-screen high score is pending, cleared into game_state 6 by Enter
+
 onKey('esc', () => { if (game_state === 6) player_name = ''; }); // clear a mistyped name
 onKey('space', triggerDash);
 onKey('enter', () => {
+  if (game_state === 4 && readyForNameEntry) {
+    readyForNameEntry = false;
+    player_name = '';
+    is_name_entered = true;
+    game_state = 6;
+    return;
+  }
   if (game_state === 6 && player_name.length > 0) {
     save_highscore(player_score, player_name.toUpperCase());
     game_state = 5; // show the updated highscore table
@@ -1551,13 +1560,12 @@ let loop = GameLoop({  // create the main game loop
         game_won.update();
         // Check if player made a high score
         highscores = get_highscores();
-        if (!is_name_entered && (highscores.length < MAX_HIGH_SCORES || player_score > highscores[highscores.length - 1].score)) {
-          // Player has a high score — collect their name via in-canvas
-          // entry instead of prompt(), which is blocked in the sandboxed
-          // iframe js13k entries are played in.
-          player_name = '';
-          is_name_entered = true; // guards against re-triggering every frame
-          game_state = 6;
+        if (!is_name_entered && !readyForNameEntry && (highscores.length < MAX_HIGH_SCORES || player_score > highscores[highscores.length - 1].score)) {
+          // Player has a high score — don't jump straight to name entry,
+          // or the win screen (and its color-cycle text) never gets a
+          // render pass. Flag it and let Enter drive the transition
+          // instead, via the onKey('enter', ...) handler above.
+          readyForNameEntry = true;
         }
         break;
       case 5:
@@ -1590,7 +1598,9 @@ let loop = GameLoop({  // create the main game loop
         break;
       case 4:
         game_won.render();
-        start_again.render();
+        if (readyForNameEntry) {
+          mk_cell('New High Score! Press [Enter] to continue', canvas.width / 2, 260, bold_font).render();
+        }
         break;
       case 5:
         highscores_title.render()
