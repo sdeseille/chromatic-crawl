@@ -1,3 +1,5 @@
+import { init, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, SpriteSheet, loadImage } from 'kontra';
+
 // ============================================================================
 // CHROMATIC CRAWL — Dungeon generation & rendering
 // Implements the Isaac "core algorithm" (boristhebrave.com write-up), scaled
@@ -428,7 +430,7 @@ const DASH_FRAMES = 10;            // ~0.17s dash duration
 const DASH_COOLDOWN_FRAMES = 30;   // ~0.5s before another dash is allowed
 
 function renderRoom(room, dungeon, canvas) {
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   let { width: w, height: h } = canvas;
 
   ctx.fillStyle = '#111';
@@ -462,7 +464,7 @@ function drawDoorGap(ctx, dir, w, h) {
 // Cheap to add since room state is already {id, cleared, color}: just walk
 // the map and draw one small square per generated cell.
 function renderMinimap(dungeon, currentRoomId, x0 = 12, y0 = 12, cell = 10) {
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   dungeon.rooms.forEach(room => {
     let { x, y } = idToXY(room.id);
     ctx.fillStyle = room.id === currentRoomId
@@ -482,7 +484,7 @@ function renderPlayer() {
   // "recovering" rather than the player silently ignoring more damage.
   if (player.invincibleFrames > 0 && (player.invincibleFrames % 6) < 3) return;
 
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   if (!playerSprite) {
     ctx.fillStyle = '#fff';
     ctx.beginPath();
@@ -513,7 +515,7 @@ function renderPlayer() {
 // from the room, which is drawn via ctx.translate(0, BANNER_H) below.
 // ============================================================================
 function renderBanner() {
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   ctx.save();
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, canvas.width, BANNER_H);
@@ -538,7 +540,7 @@ function renderBanner() {
 }
 
 function renderLevelAndHealth() {
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   ctx.save();
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
@@ -555,7 +557,7 @@ function renderLevelAndHealth() {
 }
 
 function renderTimer() {
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -884,7 +886,7 @@ function renderEnemy(e) {
     return;
   }
   // Fallback while creature-sheet.png is still loading.
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   ctx.fillStyle = ENEMY_TINTS[e.color] || '#888';
   ctx.beginPath();
   ctx.arc(e.x, e.y, ENEMY_SIZE / 2, 0, Math.PI * 2);
@@ -976,9 +978,6 @@ function renderEnemies() {
   room.enemies.forEach(renderEnemy);
 }
 
-
-let { init, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, SpriteSheet, loadImage } = kontra;
-
 let // ZzFXMicro - Zuper Zmall Zound Zynth - v1.3.1 by Frank Force ~ 1000 bytes
 zzfxV=.3,               // volume
 zzfxX=new AudioContext, // audio context
@@ -1018,6 +1017,7 @@ function playSound(type){
 const { canvas } = init();
 initPointer();
 initKeys();
+function kontraGetContext() { return canvas.getContext('2d'); }
 
 // ---- HUD layout -----------------------------------------------------------
 // Gameplay (walls, doors, player, enemies) is entirely unaware of the
@@ -1197,7 +1197,7 @@ function applyBossKnockback(boss) {
 // while it's in its vulnerable recovery window, and small HP pips so a hit
 // actually reads as progress toward defeating it.
 function renderBoss(room) {
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   let boss = room.boss;
   let bx = boss ? boss.x : roomView.width / 2;
   let by = boss ? boss.y : roomView.height / 2;
@@ -1352,7 +1352,7 @@ function drawColorCrystal(ctx, x, y, color, scale = 3) {
 
 function renderCutscene() {
   if (!cutscene) return;
-  let ctx = kontra.getContext();
+  let ctx = kontraGetContext();
   let cx = roomView.width / 2;
   let groundY = roomView.height / 2 + 20;
   let potX = cx - 24, lepX = cx + 12;
@@ -1754,7 +1754,7 @@ let loop = GameLoop({  // create the main game loop
         start_menu.render();
         break;
       case 2: {
-        let ctx = kontra.getContext();
+        let ctx = kontraGetContext();
         ctx.save();
         ctx.translate(0, BANNER_H);
         renderRoom(dungeon.rooms.get(currentRoomId), dungeon, roomView);
@@ -1785,7 +1785,7 @@ let loop = GameLoop({  // create the main game loop
         mk_cell(player_name.toUpperCase(), canvas.width/2, 210, bold_font).render();
         break;
       case 7: {
-        let ctx = kontra.getContext();
+        let ctx = kontraGetContext();
         ctx.save();
         ctx.translate(0, BANNER_H);
         renderRoom(dungeon.rooms.get(currentRoomId), dungeon, roomView);
