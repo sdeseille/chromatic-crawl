@@ -161,6 +161,18 @@ for a,b in pairs:
 "
 ```
 
-### Create the zipped archive of final result
+## Create the zipped archive of final result
 
-I won't tell you how to zip a file.
+Finally there is some tips even for ziping the global package.
+
+### First we create the zip package
+
+```bash
+zip -X -9 submission.zip dist/index.html dist/assets/img/*.png
+```
+
+### Finally we optimize the global package
+
+```bash
+advzip -z -4 submission.zip
+```
