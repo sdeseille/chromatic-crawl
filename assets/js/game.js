@@ -99,8 +99,8 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 // pattern flicker instead of reading as a fixed floor. The draw functions
 // below are deterministic given (fx, fy, fw, fh, room.color) — the only
 // randomness in the whole feature is "which of these functions runs".
-// room.texture codes: p=plain, d=dots, b=brick, g=grid, i=diagonal, f=flagstone
-const TEXTURES = ['p', 'd', 'b', 'g', 'i', 'f'];
+// room.texture codes: p=plain, f=flagstone
+const TEXTURES = ['p', 'f'];
 
 function pickTexture() {
   return TEXTURES[(Math.random() * TEXTURES.length) | 0];
@@ -162,81 +162,14 @@ function clampByte(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 // already fills with the base color — this just layers a pattern on top,
 // clipped so it can never bleed over the walls or into a door gap.
 function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
-  if (!room.texture || room.texture === 'p') return;
+  if (room.texture !== 'f') return;
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(fx, fy, fw, fh);
   ctx.clip();
 
-  let light = shadeColor(room.color, 18);
-  let dark = shadeColor(room.color, -18);
-
-  switch (room.texture) {
-    case 'd':
-      ctx.fillStyle = dark;
-      for (let y = fy + 12; y < fy + fh; y += 24) {
-        for (let x = fx + 12; x < fx + fw; x += 24) {
-          ctx.beginPath();
-          ctx.arc(x, y, 2, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      break;
-
-    case 'b': {
-      ctx.strokeStyle = dark;
-      ctx.lineWidth = 1;
-      let bw = 32, bh = 16;
-      for (let y = fy, row = 0; y < fy + fh; y += bh, row++) {
-        ctx.beginPath();
-        ctx.moveTo(fx, y);
-        ctx.lineTo(fx + fw, y);
-        ctx.stroke();
-
-        let offset = (row % 2) * (bw / 2);
-        for (let x = fx + offset; x < fx + fw; x += bw) {
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(x, y + bh);
-          ctx.stroke();
-        }
-      }
-      break;
-    }
-
-    case 'g':
-      ctx.strokeStyle = light;
-      ctx.lineWidth = 1;
-      for (let x = fx; x < fx + fw; x += 20) {
-        ctx.beginPath();
-        ctx.moveTo(x, fy);
-        ctx.lineTo(x, fy + fh);
-        ctx.stroke();
-      }
-      for (let y = fy; y < fy + fh; y += 20) {
-        ctx.beginPath();
-        ctx.moveTo(fx, y);
-        ctx.lineTo(fx + fw, y);
-        ctx.stroke();
-      }
-      break;
-
-    case 'i':
-      ctx.strokeStyle = dark;
-      ctx.lineWidth = 1;
-      for (let x = fx - fh; x < fx + fw; x += 18) {
-        ctx.beginPath();
-        ctx.moveTo(x, fy);
-        ctx.lineTo(x + fh, fy + fh);
-        ctx.stroke();
-      }
-      break;
-
-    case 'f':
-      drawFlagstoneTexture(ctx, room, fx, fy);
-      break;
-  }
+  drawFlagstoneTexture(ctx, room, fx, fy);
 
   ctx.restore();
 }
@@ -616,7 +549,7 @@ function defeatGuardian(room) {
 
   if (room.type === 'b') {
     collectColor(room.color);
-    startVictoryCutscene(room.color); // pot → blink → burst → arm raise → crystal, then advanceOrWin()
+    advanceOrWin();
   } else {
     player_score += 50; // minor room, tune later
   }
@@ -627,9 +560,6 @@ function collectColor(color) {
   applyColorBlessing(color); // story-tied reward — see COLOR BLESSINGS section
   player_health = MAX_HEALTH; // full heal, against whatever the ceiling now is
   playSound('p');
-  // advanceOrWin() no longer fires here — it now fires at the end of the
-  // victory cutscene (finishCutscene), so the reward itself still lands the
-  // instant the boss dies, but the level transition waits for the flourish.
 }
 
 // ============================================================================
@@ -693,11 +623,6 @@ function advanceOrWin() {
 // for the <img> — nothing downstream (Sprite, animations, render) changes.
 // ============================================================================
 
-const ENEMY_TINTS = {
-  red: '#c0392b', orange: '#e07b1a', yellow: '#d4b106',
-  green: '#2ecc71', blue: '#2f6fd1', indigo: '#4b3fae', violet: '#9b3fd1',
-};
-
 let tintedSheetCache = new Map(); // color -> offscreen canvas, built once and reused
 
 function getTintedSheet(color) {
@@ -712,7 +637,7 @@ function getTintedSheet(color) {
 
   octx.drawImage(creatureBaseImg, 0, 0);
   octx.globalCompositeOperation = 'multiply';
-  octx.fillStyle = ENEMY_TINTS[color] || '#ffffff';
+  octx.fillStyle = color || 'white';
   octx.fillRect(0, 0, w, h);
   octx.globalCompositeOperation = 'destination-in';
   octx.drawImage(creatureBaseImg, 0, 0);
@@ -790,7 +715,7 @@ function renderEnemy(e) {
   }
   // Fallback while creature-sheet.png is still loading.
   let ctx = kontraGetContext();
-  ctx.fillStyle = ENEMY_TINTS[e.color] || '#888';
+  ctx.fillStyle = e.color || 'gray';
   ctx.beginPath();
   ctx.arc(e.x, e.y, ENEMY_SIZE / 2, 0, Math.PI * 2);
   ctx.fill();
@@ -934,7 +859,6 @@ const roomView = { width: ROOM_W, height: ROOM_H };
 
 // ------------ LOAD SPRITESHEETS ------------
 
-const IMG_PATH = 'assets/img/';   // ← adjust if your art lives elsewhere
 const PLAYER_SPRITE_SIZE = 28;
 const GUARDIAN_SPRITE_SIZE = 48;
 
@@ -942,10 +866,7 @@ let playerSprite = null;
 let guardianSprite = null;
 let playerFacingLeft = false;
 let creatureBaseImg = null; // raw, untinted creature-sheet — every enemy/guardian recolors from this one image
-let leprechaunImg = null; // raw 64x16 sheet, 4 frames of 16x16 — drawn frame-by-frame, no kontra animation
-let potImg = null;        // raw 32x16 sheet, 2 frames of 16x16 (full pot / burst)
-
-loadImage(IMG_PATH + 'piskel-unicorn.png').then(img => {
+loadImage('piskel-unicorn.png').then(img => {
   let sheet = SpriteSheet({
     image: img, frameWidth: 16, frameHeight: 16,
     animations: { walk: { frames: '0..3', frameRate: 8, loop: true } }
@@ -959,14 +880,7 @@ loadImage(IMG_PATH + 'piskel-unicorn.png').then(img => {
   playerSprite.currentAnimation.stop(); // idle on frame 0 until moving
 });
 
-// Boss-defeat cutscene actors. Drawn straight from these raw images via
-// drawSheetFrame() (see BOSS DEFEAT CUTSCENE section) rather than through a
-// kontra SpriteSheet/animation, since the cutscene needs to hold on and
-// switch between exact frames on its own timers, not autoplay at a frameRate.
-loadImage(IMG_PATH + 'leprechaun_64x16.png').then(img => leprechaunImg = img);
-loadImage(IMG_PATH + 'gold_pot_32x16.png').then(img => potImg = img);
-
-loadImage(IMG_PATH + 'creature-sheet.png').then(img => {
+loadImage('creature-sheet.png').then(img => {
   creatureBaseImg = img;
   // Was hardcoded 'violet' regardless of level — every boss looked the
   // same color no matter what you were fighting for. Tint to whatever
@@ -1142,162 +1056,6 @@ function renderBoss(room) {
   ctx.restore();
 }
 
-// ============================================================================
-// BOSS DEFEAT CUTSCENE — "the Leprechaun returns a color"
-// Fires once per boss kill (startVictoryCutscene, called from defeatGuardian
-// above). Runs during a dedicated game_state (7) so gameplay is fully frozen
-// — no player/enemy/boss updates — while a short, fixed sequence plays out
-// on the leprechaun_64x16.png / gold_pot_32x16.png sheets supplied
-// for this feature:
-//   'pot'         — pot of gold sits out (pot frame 0), leprechaun blinks
-//                    between his two idle frames (0/1)
-//   'burst'       — pot flashes to its sparkle-burst frame (1), then is gone
-//   'raise'       — leprechaun swings from arms-down to arms-raised (2)
-//   'crystalgrow' — leprechaun holds his final arms-up frame (3) while a
-//                    tiny crystal in the reclaimed color pops in above his
-//                    head, scaling up from nothing
-//   'hold'        — crystal held fully visible for a beat
-// then finishCutscene() hands off to advanceOrWin(), exactly where the old
-// immediate collectColor() call used to.
-//
-// Every frame is drawn straight off the raw sheet with drawSheetFrame()
-// rather than a kontra SpriteSheet/animation — the cutscene needs to hold on
-// and switch between *specific* frames on its own timers, not autoplay at a
-// fixed frameRate, so manual source-rect draws are simpler here.
-// ============================================================================
-
-const CUTSCENE_POT_FRAMES = 80;          // pot sits out + leprechaun blinks, ~1.3s
-const CUTSCENE_BURST_FRAMES = 14;        // pot sparkle-burst frame, ~0.25s
-const CUTSCENE_RAISE_FRAMES = 16;        // arms-raising transition pose, ~0.25s
-const CUTSCENE_CRYSTAL_GROW_FRAMES = 18; // crystal scales in, ~0.3s
-const CUTSCENE_CRYSTAL_HOLD_FRAMES = 80; // crystal held, ~0.9s, then next level
-const CUTSCENE_BLINK_PERIOD = 18;        // ticks between leprechaun idle-frame swaps
-
-const LEPRECHAUN_SIZE = 42; // native sheet frames are 16x16, scaled up like every other sprite here
-const POT_SIZE = 34;
-
-// cutscene.phase codes: p=pot, b=burst, r=raise, g=crystalgrow, h=hold
-function startVictoryCutscene(color) {
-  cutscene = { color, phase: 'p', timer: CUTSCENE_POT_FRAMES, elapsed: 0 };
-  game_state = 7;
-}
-
-function updateCutscene() {
-  if (!cutscene) return;
-  cutscene.elapsed++;
-  if (--cutscene.timer > 0) return;
-
-  switch (cutscene.phase) {
-    case 'p':
-      cutscene.phase = 'b';
-      cutscene.timer = CUTSCENE_BURST_FRAMES;
-      playSound('p');
-      break;
-    case 'b':
-      cutscene.phase = 'r';
-      cutscene.timer = CUTSCENE_RAISE_FRAMES;
-      break;
-    case 'r':
-      cutscene.phase = 'g';
-      cutscene.timer = CUTSCENE_CRYSTAL_GROW_FRAMES;
-      break;
-    case 'g':
-      cutscene.phase = 'h';
-      cutscene.timer = CUTSCENE_CRYSTAL_HOLD_FRAMES;
-      break;
-    case 'h':
-      finishCutscene();
-      break;
-  }
-}
-
-function finishCutscene() {
-  cutscene = null;
-  game_state = 2;
-  advanceOrWin(); // same call the old immediate collectColor() used to make
-}
-
-// Draws one 16x16 source frame from a horizontal sheet, scaled up, anchored
-// at (cx, groundY) as bottom-center — matches how the room/enemy sprites
-// already read (feet planted on the floor).
-function drawSheetFrame(ctx, img, frame, cx, groundY, size) {
-  if (!img) return;
-  ctx.drawImage(img, frame * 16, 0, 16, 16, cx - size / 2, groundY - size, size, size);
-}
-
-// "Very simple and very tiny": a single small diamond, split into two
-// facets for a cheap glint, outlined, tinted to the reclaimed color via the
-// same ENEMY_TINTS map bosses/enemies already use — no new color data.
-function drawColorCrystal(ctx, x, y, color, scale = 3) {
-  let hex = ENEMY_TINTS[color] || '#fff';
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.scale(scale, scale);
-
-  ctx.fillStyle = hex;
-  ctx.beginPath();
-  ctx.moveTo(0, -8); ctx.lineTo(5, -1); ctx.lineTo(0, 6); ctx.lineTo(-5, -1);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.fillStyle = shadeColor(hex, 60); // brighter facet = cheap glint
-  ctx.beginPath();
-  ctx.moveTo(0, -8); ctx.lineTo(2, -1); ctx.lineTo(0, 6); ctx.lineTo(-1, -1);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.strokeStyle = shadeColor(hex, -50);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, -8); ctx.lineTo(5, -1); ctx.lineTo(0, 6); ctx.lineTo(-5, -1);
-  ctx.closePath();
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-function renderCutscene() {
-  if (!cutscene) return;
-  let ctx = kontraGetContext();
-  let cx = roomView.width / 2;
-  let groundY = roomView.height / 2 + 20;
-  let potX = cx - 24, lepX = cx + 12;
-
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,.35)'; // dim the frozen room so the cutscene reads clearly
-  ctx.fillRect(0, 0, roomView.width, roomView.height);
-  ctx.restore();
-
-  let lepFrame = 0, showPot = false, potFrame = 0;
-
-  switch (cutscene.phase) {
-    case 'p':
-      lepFrame = ((cutscene.elapsed / CUTSCENE_BLINK_PERIOD) | 0) % 2; // blink between poses 1 & 2
-      showPot = true; potFrame = 0;
-      break;
-    case 'b':
-      showPot = true; potFrame = 1;
-      break;
-    case 'r':
-      lepFrame = 2;
-      break;
-    case 'g':
-    case 'h':
-      lepFrame = 3;
-      break;
-  }
-
-  if (showPot) drawSheetFrame(ctx, potImg, potFrame, potX, groundY, POT_SIZE);
-  drawSheetFrame(ctx, leprechaunImg, lepFrame, lepX, groundY, LEPRECHAUN_SIZE);
-
-  if (cutscene.phase === 'g' || cutscene.phase === 'h') {
-    let grow = cutscene.phase === 'g'
-      ? 1 - cutscene.timer / CUTSCENE_CRYSTAL_GROW_FRAMES
-      : 1;
-    drawColorCrystal(ctx, lepX, groundY - LEPRECHAUN_SIZE - 6, cutscene.color, grow);
-  }
-}
-
 // ------------ CONSTANT ------------
 const bold_font = 'bold 20px Arial, sans-serif';
 const normal_font = '20px Arial, sans-serif';
@@ -1309,7 +1067,6 @@ const text_options = {
 // ------------ Global ------------
 let dungeon;
 let currentRoomId;
-let cutscene = null; // victory cutscene state machine — see BOSS DEFEAT CUTSCENE section
 let player = {
   x: 0, y: 0,
   invincibleFrames: 0,
@@ -1579,7 +1336,6 @@ function initGame(reason, level) {
     player_score = 0;
     player_name = '';
     is_name_entered = false;
-    cutscene = null;
     MAX_HEALTH = 3; // undo any Red (Vitality) blessing from the previous run
     player.dashSpeedMult = 1;
     player.dashCooldownMult = 1;
@@ -1644,9 +1400,6 @@ let loop = GameLoop({  // create the main game loop
         break;
       case 6:
         break; // fully driven by onKey handlers; nothing to poll each tick
-      case 7:
-        updateCutscene();
-        break;
     }
   },
   render: function() { // render the game state
@@ -1686,17 +1439,6 @@ let loop = GameLoop({  // create the main game loop
         mk_cell('Type up to 3 letters, Enter to confirm (Esc to clear)', canvas.width/2, 160).render();
         mk_cell(player_name.toUpperCase(), canvas.width/2, 210, bold_font).render();
         break;
-      case 7: {
-        let ctx = kontraGetContext();
-        ctx.save();
-        ctx.translate(0, BANNER_H);
-        renderRoom(dungeon.rooms.get(currentRoomId), dungeon, roomView);
-        renderPlayer();
-        renderCutscene();
-        ctx.restore();
-        renderBanner();
-        break;
-      }
     }
   }
 });
