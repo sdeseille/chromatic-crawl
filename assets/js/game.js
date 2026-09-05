@@ -99,99 +99,11 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 // pattern flicker instead of reading as a fixed floor. The draw functions
 // below are deterministic given (fx, fy, fw, fh, room.color) — the only
 // randomness in the whole feature is "which of these functions runs".
-const TEXTURES = ['plain', 'dots', 'brick', 'grid', 'diagonal', 'stone', 'flagstone'];
+// room.texture codes: p=plain, d=dots, b=brick, g=grid, i=diagonal, f=flagstone
+const TEXTURES = ['p', 'd', 'b', 'g', 'i', 'f'];
 
 function pickTexture() {
   return TEXTURES[(Math.random() * TEXTURES.length) | 0];
-}
-
-// ---- Stone floor (irregular flagstones, grouped into square modules) ------
-// First pass used coursed rows of similar-height slabs — that's a masonry
-// *wall* technique (stretcher bond), which is why it read wrong for a
-// floor. This instead mimics tabletop-dungeon-tile flooring: the floor is
-// divided into square macro cells (like individual physical tile pieces),
-// and each cell is recursively split (BSP-style) into stone chunks of very
-// different sizes — "crazy paving" rather than aligned rows.
-//
-// Like the coursed version, this needs real per-room randomness (which cuts
-// happen where), so it's built ONCE per room and cached as room.stoneTiles.
-// drawStoneTexture() only ever reads that cached list — never calls
-// Math.random() itself — so the floor stays static frame to frame instead
-// of re-cracking every tick.
-const STONE_CELL = 90;          // target macro cell size (~one "tile square")
-const STONE_MIN = 10;           // smallest stone chunk allowed
-const STONE_MAX_DEPTH = 4;      // subdivision depth cap, bounds stone count
-const STONE_STOP_CHANCE = 0.28; // chance to stop subdividing early, for size variety
-const STONE_MORTAR = 2;         // gap between stones, reads as grout
-
-function subdivideStone(x, y, w, h, depth, out) {
-  let tooSmall = w < STONE_MIN * 2 && h < STONE_MIN * 2;
-  if (depth >= STONE_MAX_DEPTH || tooSmall || Math.random() < STONE_STOP_CHANCE) {
-    out.push({ x, y, w, h, shade: (Math.random() * 16) - 8 });
-    return;
-  }
-
-  // Usually split along the longer axis (keeps chunks from going sliver-thin),
-  // but flip sometimes so it doesn't read as a predictable grid.
-  let splitVertical = w >= h;
-  if (Math.random() < 0.25) splitVertical = !splitVertical;
-
-  if (splitVertical) {
-    let lo = STONE_MIN, hi = w - STONE_MIN;
-    if (hi <= lo) { out.push({ x, y, w, h, shade: (Math.random() * 16) - 8 }); return; }
-    let cut = lo + Math.random() * (hi - lo);
-    subdivideStone(x, y, cut, h, depth + 1, out);
-    subdivideStone(x + cut, y, w - cut, h, depth + 1, out);
-  } else {
-    let lo = STONE_MIN, hi = h - STONE_MIN;
-    if (hi <= lo) { out.push({ x, y, w, h, shade: (Math.random() * 16) - 8 }); return; }
-    let cut = lo + Math.random() * (hi - lo);
-    subdivideStone(x, y, w, cut, depth + 1, out);
-    subdivideStone(x, y + cut, w, h - cut, depth + 1, out);
-  }
-}
-
-function buildStoneTiles(fw, fh) {
-  let tiles = [];
-  let cols = Math.max(1, Math.round(fw / STONE_CELL));
-  let rows = Math.max(1, Math.round(fh / STONE_CELL));
-  let cellW = fw / cols, cellH = fh / rows;
-
-  for (let cy = 0; cy < rows; cy++) {
-    for (let cx = 0; cx < cols; cx++) {
-      subdivideStone(cx * cellW, cy * cellH, cellW, cellH, 0, tiles);
-    }
-  }
-  return tiles;
-}
-
-// Draws the cached chunk list, offset into the floor rect, with a light
-// top/left edge and dark bottom/right edge on each chunk to fake a bevel —
-// cheap 3D read without any image assets.
-function drawStoneTexture(ctx, room, fx, fy) {
-  (room.stoneTiles || []).forEach(t => {
-    let bx = fx + t.x, by = fy + t.y;
-    let bw = t.w - STONE_MORTAR, bh = t.h - STONE_MORTAR;
-    if (bw <= 0 || bh <= 0) return;
-
-    ctx.fillStyle = shadeColor(room.color, t.shade - 6);
-    ctx.fillRect(bx, by, bw, bh);
-
-    ctx.strokeStyle = shadeColor(room.color, t.shade + 20);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(bx, by + bh);
-    ctx.lineTo(bx, by);
-    ctx.lineTo(bx + bw, by);
-    ctx.stroke();
-
-    ctx.strokeStyle = shadeColor(room.color, t.shade - 28);
-    ctx.beginPath();
-    ctx.moveTo(bx + bw, by);
-    ctx.lineTo(bx + bw, by + bh);
-    ctx.lineTo(bx, by + bh);
-    ctx.stroke();
-  });
 }
 
 // ---- Flagstone floor (jittered square tiles, baked once per room) --------
@@ -250,7 +162,7 @@ function clampByte(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 // already fills with the base color — this just layers a pattern on top,
 // clipped so it can never bleed over the walls or into a door gap.
 function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
-  if (!room.texture || room.texture === 'plain') return;
+  if (!room.texture || room.texture === 'p') return;
 
   ctx.save();
   ctx.beginPath();
@@ -261,7 +173,7 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
   let dark = shadeColor(room.color, -18);
 
   switch (room.texture) {
-    case 'dots':
+    case 'd':
       ctx.fillStyle = dark;
       for (let y = fy + 12; y < fy + fh; y += 24) {
         for (let x = fx + 12; x < fx + fw; x += 24) {
@@ -272,7 +184,7 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
       }
       break;
 
-    case 'brick': {
+    case 'b': {
       ctx.strokeStyle = dark;
       ctx.lineWidth = 1;
       let bw = 32, bh = 16;
@@ -293,7 +205,7 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
       break;
     }
 
-    case 'grid':
+    case 'g':
       ctx.strokeStyle = light;
       ctx.lineWidth = 1;
       for (let x = fx; x < fx + fw; x += 20) {
@@ -310,7 +222,7 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
       }
       break;
 
-    case 'diagonal':
+    case 'i':
       ctx.strokeStyle = dark;
       ctx.lineWidth = 1;
       for (let x = fx - fh; x < fx + fw; x += 18) {
@@ -321,11 +233,7 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
       }
       break;
 
-    case 'stone':
-      drawStoneTexture(ctx, room, fx, fy);
-      break;
-
-    case 'flagstone':
+    case 'f':
       drawFlagstoneTexture(ctx, room, fx, fy);
       break;
   }
@@ -333,28 +241,27 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
   ctx.restore();
 }
 
+// room.type codes: n=normal, s=start, b=boss
 function finalizeDungeon(occupied, endRooms, levelColor) {
   let rooms = Array.from(occupied.values());
   rooms.forEach(r => {
-    r.type = 'normal';
+    r.type = 'n';
     r.cleared = true;
     r.hasGuardian = false;
     r.enemies = [];
     r.texture = pickTexture();
-    if (r.texture === 'stone') {
-      r.stoneTiles = buildStoneTiles(roomView.width - 2 * WALL, roomView.height - 2 * WALL);
-    } else if (r.texture === 'flagstone') {
+    if (r.texture === 'flagstone') {
       r.flagstoneTiles = buildFlagstoneTiles(roomView.width - 2 * WALL, roomView.height - 2 * WALL);
     }
   });
 
   let start = occupied.get(START_ID);
-  start.type = 'start';
+  start.type = 's';
   start.cleared = true;
 
   let bossId = endRooms[endRooms.length - 1];
   let boss = occupied.get(bossId);
-  boss.type = 'boss';
+  boss.type = 'b';
   boss.hasGuardian = true;
   boss.cleared = false;
   boss.color = levelColor;
@@ -365,7 +272,7 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
   // gets one starts locked (cleared = false) — doors render red and stay
   // solid — until every enemy in it is defeated (see checkRoomClear).
   rooms.forEach(r => {
-    if (r.type === 'normal' && Math.random() < 0.5) {
+    if (r.type === 'n' && Math.random() < 0.5) {
       r.enemies.push(spawnEnemy(levelColor));
       r.cleared = false;
     }
@@ -395,7 +302,6 @@ function generateDungeon(level, targetRooms = 13, maxAttempts = 60) {
 
   // Should be unreachable at 12-15 rooms on a 9x8 grid, but fall back rather
   // than hang — accept whatever the last attempt produced.
-  console.warn('generateDungeon: hit maxAttempts, using last floorplan as-is');
   let { occupied, endRooms } = generateFloorplan(targetRooms);
   return finalizeDungeon(occupied, endRooms);
 }
@@ -678,7 +584,7 @@ function triggerDash() {
   // Dashing is also a brief i-frame window, so dashing into the thing that
   // would've hit you doesn't cost a heart on the way through.
   player.invincibleFrames = Math.max(player.invincibleFrames, DASH_FRAMES + 6);
-  playSound('dash');
+  playSound('d');
 }
 
 function updatePlayerAnimation(moving, dx) {
@@ -703,14 +609,12 @@ function placePlayerAtDoor(player, dirEntered, canvas) {
   }
 }
 
-let collected_colors = [];
-
 function defeatGuardian(room) {
   room.cleared = true;
   room.hasGuardian = false;
-  playSound('squash');
+  playSound('s');
 
-  if (room.type === 'boss') {
+  if (room.type === 'b') {
     collectColor(room.color);
     startVictoryCutscene(room.color); // pot → blink → burst → arm raise → crystal, then advanceOrWin()
   } else {
@@ -719,11 +623,10 @@ function defeatGuardian(room) {
 }
 
 function collectColor(color) {
-  collected_colors.push(color);
   player_score += 100 + computeTimeBonus(chrono.getElapsed());
   applyColorBlessing(color); // story-tied reward — see COLOR BLESSINGS section
   player_health = MAX_HEALTH; // full heal, against whatever the ceiling now is
-  playSound('pickup');
+  playSound('p');
   // advanceOrWin() no longer fires here — it now fires at the end of the
   // victory cutscene (finishCutscene), so the reward itself still lands the
   // instant the boss dies, but the level transition waits for the flourish.
@@ -908,7 +811,7 @@ function checkEnemyContact(room) {
 
     if (player.dashFrames > 0) {
       e.alive = false;
-      playSound('squash');
+      playSound('s');
       player_score += 10; // small reward for a clean dash kill
     } else if (player.invincibleFrames <= 0) {
       hurtPlayer(e);
@@ -927,14 +830,14 @@ function hurtPlayer(source) {
     player.shieldCharges--;
     player.invincibleFrames = PLAYER_INVINCIBLE_FRAMES + player.iFrameBonus;
     applyKnockback(source);
-    playSound('pickup');
+    playSound('p');
     return;
   }
 
   player_health--;
   player.invincibleFrames = PLAYER_INVINCIBLE_FRAMES + player.iFrameBonus; // Blue blessing extends this
   applyKnockback(source);
-  playSound('rebound');
+  playSound('r');
   if (player_health <= 0) {
     game_state = 3;
     chrono.stop();
@@ -956,11 +859,11 @@ function applyKnockback(source) {
 // dead, open its doors — boss rooms are untouched here, they clear through
 // checkBossContact/defeatGuardian instead.
 function checkRoomClear(room) {
-  if (room.cleared || room.type === 'boss') return;
+  if (room.cleared || room.type === 'b') return;
   if (!room.enemies || !room.enemies.length) return;
   if (room.enemies.every(e => !e.alive)) {
     room.cleared = true;
-    playSound('pickup');
+    playSound('p');
   }
 }
 
@@ -997,18 +900,19 @@ b.buffer=p;b.connect(zzfxX.destination);b.start()}
 
 
 // --- Litlle sound engine ---
+// playSound codes: r=rebound, d=dash, s=squash, p=pickup
 function playSound(type){
   switch(type){
-    case "rebound":
+    case "r":
       zzfx(...[2.1,,358,.02,.01,.17,4,3.6,,,,,,.6,15,.4,.17,.75,.06]);
       break;
-    case "dash":
+    case "d":
       zzfx(...[,,400,.05,.15,.2,,2]);
       break;
-    case "squash":
+    case "s":
       zzfx(...[,,60,.2,.3,.4,2]);
       break;
-    case "pickup":
+    case "p":
       zzfx(...[1.5,,539,,,.06,,.8,,,,,,.1,,,,.65]);
       break;
   }
@@ -1092,10 +996,11 @@ const BOSS_INVINCIBLE_FRAMES = 20;  // i-frames after taking a dash hit, so one 
 const BOSS_KNOCKBACK_DIST = 14;
 const BOSS_HIT_RADIUS = GUARDIAN_SPRITE_SIZE / 2 + PLAYER_SIZE;
 
+// boss.state codes: i=idle, t=telegraph, c=charge, r=recover
 function makeBoss() {
   return {
     hp: BOSS_HP,
-    state: 'idle',
+    state: 'i',
     timer: BOSS_IDLE_FRAMES,
     x: roomView.width / 2,
     y: roomView.height / 2,
@@ -1122,32 +1027,32 @@ function updateBoss(room) {
   if (boss.invincibleFrames > 0) boss.invincibleFrames--;
 
   switch (boss.state) {
-    case 'idle':
-      if (--boss.timer <= 0) { boss.state = 'telegraph'; boss.timer = BOSS_TELEGRAPH_FRAMES; }
+    case 'i':
+      if (--boss.timer <= 0) { boss.state = 't'; boss.timer = BOSS_TELEGRAPH_FRAMES; }
       break;
 
-    case 'telegraph':
+    case 't':
       if (--boss.timer <= 0) {
         let dx = player.x - boss.x, dy = player.y - boss.y;
         let len = Math.hypot(dx, dy) || 1;
         boss.chargeDirX = dx / len;
         boss.chargeDirY = dy / len;
-        boss.state = 'charge';
+        boss.state = 'c';
         boss.timer = BOSS_CHARGE_FRAMES;
       }
       break;
 
-    case 'charge': {
+    case 'c': {
       let nx = boss.x + boss.chargeDirX * BOSS_CHARGE_SPEED;
       let ny = boss.y + boss.chargeDirY * BOSS_CHARGE_SPEED;
       if (!isBlockedByWall(nx, boss.y, room, roomView)) boss.x = nx;
       if (!isBlockedByWall(boss.x, ny, room, roomView)) boss.y = ny;
-      if (--boss.timer <= 0) { boss.state = 'recover'; boss.timer = BOSS_RECOVER_FRAMES; }
+      if (--boss.timer <= 0) { boss.state = 'r'; boss.timer = BOSS_RECOVER_FRAMES; }
       break;
     }
 
-    case 'recover':
-      if (--boss.timer <= 0) { boss.state = 'idle'; boss.timer = BOSS_IDLE_FRAMES; }
+    case 'r':
+      if (--boss.timer <= 0) { boss.state = 'i'; boss.timer = BOSS_IDLE_FRAMES; }
       break;
   }
 
@@ -1171,11 +1076,11 @@ function checkBossContact(room) {
     if (boss.invincibleFrames <= 0) {
       boss.hp--;
       boss.invincibleFrames = BOSS_INVINCIBLE_FRAMES;
-      playSound('squash');
+      playSound('s');
       applyBossKnockback(boss);
       if (boss.hp <= 0) defeatGuardian(room);
     }
-  } else if (boss.state === 'charge' && player.invincibleFrames <= 0) {
+  } else if (boss.state === 'c' && player.invincibleFrames <= 0) {
     hurtPlayer(boss);
   }
 }
@@ -1202,7 +1107,7 @@ function renderBoss(room) {
   let bx = boss ? boss.x : roomView.width / 2;
   let by = boss ? boss.y : roomView.height / 2;
 
-  let flashHidden = boss && boss.state === 'telegraph' && (boss.timer % 6) < 3;
+  let flashHidden = boss && boss.state === 't' && (boss.timer % 6) < 3;
   if (!flashHidden) {
     if (guardianSprite) {
       guardianSprite.x = bx;
@@ -1218,7 +1123,7 @@ function renderBoss(room) {
 
   if (!boss) return;
 
-  if (boss.state === 'recover') {
+  if (boss.state === 'r') {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -1271,8 +1176,9 @@ const CUTSCENE_BLINK_PERIOD = 18;        // ticks between leprechaun idle-frame 
 const LEPRECHAUN_SIZE = 42; // native sheet frames are 16x16, scaled up like every other sprite here
 const POT_SIZE = 34;
 
+// cutscene.phase codes: p=pot, b=burst, r=raise, g=crystalgrow, h=hold
 function startVictoryCutscene(color) {
-  cutscene = { color, phase: 'pot', timer: CUTSCENE_POT_FRAMES, elapsed: 0 };
+  cutscene = { color, phase: 'p', timer: CUTSCENE_POT_FRAMES, elapsed: 0 };
   game_state = 7;
 }
 
@@ -1282,24 +1188,24 @@ function updateCutscene() {
   if (--cutscene.timer > 0) return;
 
   switch (cutscene.phase) {
-    case 'pot':
-      cutscene.phase = 'burst';
+    case 'p':
+      cutscene.phase = 'b';
       cutscene.timer = CUTSCENE_BURST_FRAMES;
-      playSound('pickup');
+      playSound('p');
       break;
-    case 'burst':
-      cutscene.phase = 'raise';
+    case 'b':
+      cutscene.phase = 'r';
       cutscene.timer = CUTSCENE_RAISE_FRAMES;
       break;
-    case 'raise':
-      cutscene.phase = 'crystalgrow';
+    case 'r':
+      cutscene.phase = 'g';
       cutscene.timer = CUTSCENE_CRYSTAL_GROW_FRAMES;
       break;
-    case 'crystalgrow':
-      cutscene.phase = 'hold';
+    case 'g':
+      cutscene.phase = 'h';
       cutscene.timer = CUTSCENE_CRYSTAL_HOLD_FRAMES;
       break;
-    case 'hold':
+    case 'h':
       finishCutscene();
       break;
   }
@@ -1365,18 +1271,18 @@ function renderCutscene() {
   let lepFrame = 0, showPot = false, potFrame = 0;
 
   switch (cutscene.phase) {
-    case 'pot':
+    case 'p':
       lepFrame = ((cutscene.elapsed / CUTSCENE_BLINK_PERIOD) | 0) % 2; // blink between poses 1 & 2
       showPot = true; potFrame = 0;
       break;
-    case 'burst':
+    case 'b':
       showPot = true; potFrame = 1;
       break;
-    case 'raise':
+    case 'r':
       lepFrame = 2;
       break;
-    case 'crystalgrow':
-    case 'hold':
+    case 'g':
+    case 'h':
       lepFrame = 3;
       break;
   }
@@ -1384,8 +1290,8 @@ function renderCutscene() {
   if (showPot) drawSheetFrame(ctx, potImg, potFrame, potX, groundY, POT_SIZE);
   drawSheetFrame(ctx, leprechaunImg, lepFrame, lepX, groundY, LEPRECHAUN_SIZE);
 
-  if (cutscene.phase === 'crystalgrow' || cutscene.phase === 'hold') {
-    let grow = cutscene.phase === 'crystalgrow'
+  if (cutscene.phase === 'g' || cutscene.phase === 'h') {
+    let grow = cutscene.phase === 'g'
       ? 1 - cutscene.timer / CUTSCENE_CRYSTAL_GROW_FRAMES
       : 1;
     drawColorCrystal(ctx, lepX, groundY - LEPRECHAUN_SIZE - 6, cutscene.color, grow);
@@ -1475,7 +1381,6 @@ function handleLetterKey(letter) {
       return;
     }
     if (letter === 'r') {
-      console.log("r key pressed ! ");
       game_state = 1;
       initGame('restart', current_level);
     }
@@ -1503,7 +1408,7 @@ onKey('enter', () => {
 
 function get_highscores() {
   // Retrieve scores from localStorage or return an empty array if not present
-  return JSON.parse(localStorage.getItem('chromatic_crawl_highscores')) || [];
+  return JSON.parse(localStorage.getItem('cch')) || [];
 }
 
 function save_highscore(new_score, player_name) {
@@ -1518,7 +1423,7 @@ function save_highscore(new_score, player_name) {
   highscores.splice(MAX_HIGH_SCORES);
 
   // Save back to localStorage
-  localStorage.setItem('chromatic_crawl_highscores', JSON.stringify(highscores));
+  localStorage.setItem('cch', JSON.stringify(highscores));
 }
 
 function mk_cell(text, x, y, font = normal_font) {
@@ -1627,7 +1532,6 @@ let start = Text({
   text: 'Start',
   onDown: function() {
     // handle on down events on the sprite
-    console.log("Clicked on Start");
     game_state = 2;
   },
   onOver: function() {
@@ -1643,7 +1547,6 @@ let highscore = Text({
   text: 'Highscore',
   onDown: function() {
     // handle on down events on the sprite
-    console.log("Clicked on High Score");
     game_state = 5;
   },
   onOver: function() {
@@ -1676,7 +1579,6 @@ function initGame(reason, level) {
     player_score = 0;
     player_name = '';
     is_name_entered = false;
-    collected_colors = [];
     cutscene = null;
     MAX_HEALTH = 3; // undo any Red (Vitality) blessing from the previous run
     player.dashSpeedMult = 1;
