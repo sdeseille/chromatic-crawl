@@ -250,7 +250,7 @@ function finalizeDungeon(occupied, endRooms, levelColor) {
     r.hasGuardian = false;
     r.enemies = [];
     r.texture = pickTexture();
-    if (r.texture === 'flagstone') {
+    if (r.texture === 'f') {
       r.flagstoneTiles = buildFlagstoneTiles(roomView.width - 2 * WALL, roomView.height - 2 * WALL);
     }
   });
