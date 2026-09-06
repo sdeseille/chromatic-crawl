@@ -42,3 +42,7 @@ Each color pays off a different way  offense, defense, or recovery  so restoring
 Clear every room, defeat every guardian, and see the rainbow restored!
 
 ![cover](cover_img.png)
+
+## Credits
+
+* Enemy and guardian creature spritesheet created with [Creature Mixer](https://kenney.itch.io/creature-mixer) by [Kenney](https://www.kenney.nl/).
