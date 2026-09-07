@@ -1,4 +1,4 @@
-import { init, Sprite, GameLoop, initKeys, initPointer, keyPressed, onKey, Text, Grid, track, SpriteSheet, loadImage } from 'kontra';
+import { init, Sprite, GameLoop, initKeys, keyPressed, onKey, Text, SpriteSheet, loadImage } from 'kontra';
 
 // ============================================================================
 // CHROMATIC CRAWL — Dungeon generation & rendering
@@ -844,7 +844,6 @@ function playSound(type){
 }
 
 const { canvas } = init();
-initPointer();
 initKeys();
 function kontraGetContext() { return canvas.getContext('2d'); }
 
@@ -1287,6 +1286,10 @@ let start_again = Text({
 
 let start = Text({
   text: 'Start',
+  x: canvas.width/2,
+  y: 233,
+  anchor: {x: 0.5, y: 0.5},
+  textAlign: 'center',
   onDown: function() {
     // handle on down events on the sprite
     game_state = 2;
@@ -1302,6 +1305,10 @@ let start = Text({
 
 let highscore = Text({
   text: 'Highscore',
+  x: canvas.width/2,
+  y: 268,
+  anchor: {x: 0.5, y: 0.5},
+  textAlign: 'center',
   onDown: function() {
     // handle on down events on the sprite
     game_state = 5;
@@ -1315,20 +1322,42 @@ let highscore = Text({
   ...text_options
 });
 
-let start_menu = Grid({
-  x: canvas.width/2,
-  y: 250,
-  anchor: {x: 0.5, y: 0.5},
+// Replaces kontra's Grid (layout) + track (pointer hover/click) for this
+// 2-item menu — see js13k_project_plan_template.md retrospective: that
+// combo measured ~0.9KB zipped and was flagged as the first discretionary
+// cut. A fixed two-item menu doesn't need a layout engine or the full
+// pointer event pipeline (touch tracking, gesture detection, etc.) that
+// track() pulls in; native mousemove/click plus a manual box hit-test does
+// the same job for a fraction of the bytes.
+let menu_items = [start, highscore];
 
-  // add 15 pixels of space between each row
-  rowGap: 15,
+function menuHit(item, x, y) {
+  return x > item.x - item.width / 2 && x < item.x + item.width / 2 &&
+         y > item.y - item.height / 2 && y < item.y + item.height / 2;
+}
 
-  // center the children
-  justify: 'center',
+function toCanvasXY(e) {
+  let r = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) * (canvas.width / r.width),
+    y: (e.clientY - r.top) * (canvas.height / r.height)
+  };
+}
 
-  children: [start, highscore]
+canvas.addEventListener('mousemove', e => {
+  if (game_state !== 1) return;
+  let { x, y } = toCanvasXY(e);
+  menu_items.forEach(item => {
+    let hit = menuHit(item, x, y);
+    if (hit !== item.hovered) { item.hovered = hit; (hit ? item.onOver : item.onOut)(); }
+  });
 });
-track(start,highscore);
+
+canvas.addEventListener('click', e => {
+  if (game_state !== 1) return;
+  let { x, y } = toCanvasXY(e);
+  menu_items.forEach(item => { if (menuHit(item, x, y)) item.onDown(); });
+});
 
 function initGame(reason, level) {
   if (reason == 'restart') {
@@ -1406,7 +1435,8 @@ let loop = GameLoop({  // create the main game loop
     switch (game_state) {
       case 1:
         game_title.render();
-        start_menu.render();
+        start.render();
+        highscore.render();
         break;
       case 2: {
         let ctx = kontraGetContext();
