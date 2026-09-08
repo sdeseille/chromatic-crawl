@@ -8,9 +8,9 @@ The Moon Folk struck during the last eclipse, stealing every pot of gold from th
 
 You are a unicorn, and you must descend into the Moon Folk's dungeon to reclaim what was stolen.
 
-Explore room by room, dash down the creatures guarding each door, and face the color guardian waiting at the end of every level. Each guardian you defeat gives back one color of the rainbow  and with it, a new power for your unicorn, letting you overcome obstacles and guardians that stood in your way before.
+Explore room by room, dash down the creatures guarding each door, and face the color guardian waiting at the end of every level each one is hoarding a stolen pot of gold. Defeat it, and the Leprechaun appears to reclaim his pot: it bursts into a crystal of pure color, restoring that hue to the world and granting your unicorn a new power, letting you overcome obstacles and guardians that stood in your way before.
 
-Restore all seven colors, rebuild the rainbow, and bring the world back to life.
+Restore all seven pots, rebuild the rainbow, and bring the world back to life.
 
 ## How to Play
 
