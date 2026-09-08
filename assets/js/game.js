@@ -99,8 +99,8 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 // pattern flicker instead of reading as a fixed floor. The draw functions
 // below are deterministic given (fx, fy, fw, fh, room.color) — the only
 // randomness in the whole feature is "which of these functions runs".
-// room.texture codes: p=plain, f=flagstone
-const TEXTURES = ['p', 'f'];
+// room.texture codes: p=plain, d=dots, f=flagstone
+const TEXTURES = ['p', 'd', 'f'];
 
 function pickTexture() {
   return TEXTURES[(Math.random() * TEXTURES.length) | 0];
@@ -162,14 +162,25 @@ function clampByte(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 // already fills with the base color — this just layers a pattern on top,
 // clipped so it can never bleed over the walls or into a door gap.
 function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
-  if (room.texture !== 'f') return;
+  if (room.texture === 'p') return;
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(fx, fy, fw, fh);
   ctx.clip();
 
-  drawFlagstoneTexture(ctx, room, fx, fy);
+  if (room.texture === 'd') {
+    ctx.fillStyle = shadeColor(room.color, -18);
+    for (let y = fy + 12; y < fy + fh; y += 24) {
+      for (let x = fx + 12; x < fx + fw; x += 24) {
+        ctx.beginPath();
+        ctx.arc(x, y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  } else {
+    drawFlagstoneTexture(ctx, room, fx, fy);
+  }
 
   ctx.restore();
 }
@@ -267,6 +278,7 @@ const KNOCKBACK_DIST = 18;           // px pushed away from the thing that hit u
 const DASH_SPEED = 7;              // px/tick while dashing, vs PLAYER_SPEED=3 normal
 const DASH_FRAMES = 10;            // ~0.17s dash duration
 const DASH_COOLDOWN_FRAMES = 30;   // ~0.5s before another dash is allowed
+const STEP_INTERVAL = 14;          // ticks between gallop beats while walking, ~0.23s at 60tps
 
 function renderRoom(room, dungeon, canvas) {
   let ctx = kontraGetContext();
@@ -488,6 +500,8 @@ function updatePlayer() {
   updatePlayerAnimation(moving, dx);
   if (moving) { player.lastDx = dx; player.lastDy = dy; } // remembered for a directionless dash press
   if (!moving) return;
+
+  if (--player.stepTimer <= 0) { player.stepTimer = STEP_INTERVAL; playSound('w'); } // gallop cadence
 
   if (dx && dy) { dx *= 0.7071; dy *= 0.7071; }
   let nx = player.x + dx * PLAYER_SPEED;
@@ -825,7 +839,7 @@ b.buffer=p;b.connect(zzfxX.destination);b.start()}
 
 
 // --- Litlle sound engine ---
-// playSound codes: r=rebound, d=dash, s=squash, p=pickup
+// playSound codes: r=rebound, d=dash, s=squash, p=pickup, w=gallop step
 function playSound(type){
   switch(type){
     case "r":
@@ -839,6 +853,9 @@ function playSound(type){
       break;
     case "p":
       zzfx(...[1.5,,539,,,.06,,.8,,,,,,.1,,,,.65]);
+      break;
+    case "w":
+      zzfx(...[.5,,90,,.01,.04,4,.3,.1,,,,,,1,.1,,1.1]);
       break;
   }
 }
@@ -1219,7 +1236,7 @@ function renderCutscene() {
     let grow = cutscene.phase === 'g'
       ? 1 - cutscene.timer / CUTSCENE_CRYSTAL_GROW_FRAMES
       : 1;
-    drawColorCrystal(ctx, lepX, groundY - LEPRECHAUN_SIZE - 6, cutscene.color, grow);
+    drawColorCrystal(ctx, lepX, groundY - LEPRECHAUN_SIZE - 16, cutscene.color, grow);
   }
 }
 
@@ -1239,6 +1256,7 @@ let player = {
   x: 0, y: 0,
   invincibleFrames: 0,
   dashFrames: 0, dashCooldownFrames: 0, dashDirX: 0, dashDirY: 0,
+  stepTimer: 0, // gallop sound cadence, see STEP_INTERVAL
   lastDx: 1, lastDy: 0, // default facing right, so an immediate dash press has somewhere to go
   // ---- Color Blessing state (see COLOR BLESSINGS section) ----
   dashSpeedMult: 1,      // Orange: Ember Dash
