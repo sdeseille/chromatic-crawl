@@ -99,8 +99,8 @@ function colorForLevel(level) { return RAINBOW[(level - 1) % RAINBOW.length]; }
 // pattern flicker instead of reading as a fixed floor. The draw functions
 // below are deterministic given (fx, fy, fw, fh, room.color) — the only
 // randomness in the whole feature is "which of these functions runs".
-// room.texture codes: p=plain, d=dots, f=flagstone
-const TEXTURES = ['p', 'd', 'f'];
+// room.texture codes: p=plain, d=dots, f=flagstone, g=grid
+const TEXTURES = ['p', 'd', 'f', 'g'];
 
 function pickTexture() {
   return TEXTURES[(Math.random() * TEXTURES.length) | 0];
@@ -177,6 +177,21 @@ function drawFloorTexture(ctx, room, fx, fy, fw, fh) {
         ctx.arc(x, y, 2, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+  } else if (room.texture === 'g') {
+    ctx.strokeStyle = shadeColor(room.color, 18);
+    ctx.lineWidth = 1;
+    for (let x = fx; x < fx + fw; x += 20) {
+      ctx.beginPath();
+      ctx.moveTo(x, fy);
+      ctx.lineTo(x, fy + fh);
+      ctx.stroke();
+    }
+    for (let y = fy; y < fy + fh; y += 20) {
+      ctx.beginPath();
+      ctx.moveTo(fx, y);
+      ctx.lineTo(fx + fw, y);
+      ctx.stroke();
     }
   } else {
     drawFlagstoneTexture(ctx, room, fx, fy);
@@ -378,6 +393,7 @@ function renderBanner() {
   ctx.restore();
 
   renderLevelAndHealth();
+  renderTitle();
   renderTimer();
 
   const MM_CELL = 8;
@@ -407,14 +423,25 @@ function renderLevelAndHealth() {
   ctx.restore();
 }
 
+function renderTitle() {
+  let ctx = kontraGetContext();
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 20px Arial, sans-serif';
+  ctx.fillText('🌈 Chromatic Crawl 🦄', canvas.width / 2, BANNER_H / 2);
+  ctx.restore();
+}
+
 function renderTimer() {
   let ctx = kontraGetContext();
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'white';
-  ctx.font = 'bold 26px Arial, sans-serif';
-  ctx.fillText(formatTime(chrono.getElapsed()), canvas.width / 2, BANNER_H / 2);
+  ctx.font = 'bold 15px Arial, sans-serif';
+  ctx.fillText(formatTime(chrono.getElapsed()), canvas.width / 2, BANNER_H - 12);
   ctx.restore();
 }
 
